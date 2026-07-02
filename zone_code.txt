@@ -1,0 +1,46 @@
+tion createChartWithZones(containerId, instrumentData, symbol, signal, globa
+             }
+         });
+ 
+-        // ── Shaded Zones (Area Series) ─────────────────────────────────────────
+-        ZONE_PAIRS.forEach(([topKey, botKey, fillColor]) => {
+-            const topData = linesData[topKey];
+-            const botData = linesData[botKey];
+-            if (!topData.length || !botData.length) return;
+-
+-            const timeSet = topData.map(d => d.time);
+-            const botMap = {};
+-            botData.forEach(d => botMap[d.time] = d.value);
+-
+-            const areaData = [];
+-            timeSet.forEach(t => {
+-                if (botMap[t] != null) {
+-                    areaData.push({
+-                        time: t,
+-                        value: (topData.find(d => d.time === t).value + botMap[t]) / 2
+-                    });
+-                }
+-            });
+ 
+-            if (areaData.length > 0) {
+-                const area = chart.addAreaSeries({
+-                    topColor: fillColor,
+-                    bottomColor: fillColor,
+-                    lineColor: 'transparent',
+-                    lineWidth: 0,
+-                    priceLineVisible: false,
+-                    lastValueVisible: false,
+-                    crosshairMarkerVisible: false,
+-                    autoscaleInfoProvider: () => null,
+-                });
+-                area.setData(areaData);
+-                zoneSeries.push(area);
+-            }
+-        });
+ 
+         LINE_DEFS.forEach(ld => {
+             if (!linesData[ld.key].length) return;
+
+commit f5623f3db75ecbd7bff4e4f06d5c99e77ce7ab0e
+Author: Atharva Gandhi <gandhiatharv565@gmail.com>
+Date:   Wed Jul 1 21:44
