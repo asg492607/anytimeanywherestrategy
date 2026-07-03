@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trade History — Option Analysis Terminal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0e14;
+            --panel-bg: #131722;
+            --text-primary: #d1d4dc;
+            --text-secondary: #787b86;
+            --border-color: #2a2e39;
+            --primary: #2962ff;
+            --primary-hover: #1e53e5;
+            --up-color: #089981;
+            --down-color: #f23645;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .top-nav {
+            height: 50px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 20px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+        .tv-btn {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border-color);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s ease;
+        }
+        .tv-btn:hover { background: rgba(255,255,255,0.1); }
+        .tv-btn.danger { background: var(--down-color); border: none; font-weight: 600; }
+        .tv-btn.danger:hover { opacity: 0.9; }
+        
+        .main-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            overflow: hidden;
+        }
+        .header-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-shrink: 0;
+        }
+        .header-section h2 {
+            margin: 0;
+            color: white;
+            font-size: 20px;
+            font-weight: 700;
+        }
+        
+        /* Filters block */
+        .filters-panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            flex-shrink: 0;
+        }
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .filter-group label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .filter-group input, .filter-group select {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            outline: none;
+            min-width: 140px;
+        }
+        .filter-group input:focus, .filter-group select:focus {
+            border-color: var(--primary);
+        }
+        .filter-group input[type="text"] {
+            min-width: 200px;
+        }
+        
+        /* Table block */
+        .table-container {
+            flex: 1;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow-y: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 13px;
+        }
+        th {
+            background: rgba(255,255,255,0.02);
+            color: var(--text-secondary);
+            font-weight: 600;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+            cursor: pointer;
+        }
+        .badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            display: inline-block;
+        }
+        .badge.running { background: rgba(41, 98, 255, 0.15); color: #64b5f6; }
+        .badge.closed { background: rgba(120, 123, 134, 0.15); color: #b2b5be; }
+        
+        .pnl-val { font-weight: 600; }
+        .pnl-val.profit { color: var(--up-color); }
+        .pnl-val.loss { color: var(--down-color); }
+        
+        /* Pagination block */
+        .pagination-panel {
+            margin-top: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .pagination-btns {
+            display: flex;
+            gap: 8px;
+        }
+        .pagination-btn {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .pagination-btn:hover:not(:disabled) {
+            background: rgba(255,255,255,0.05);
+        }
+        .pagination-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="top-nav">
+        <div style="font-weight: 600; font-size: 16px; color: white;">Institutional Trading Terminal</div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <a href="/dashboard" class="tv-btn">📊 Dashboard</a>
+            <div style="height: 20px; width: 1px; background: var(--border-color);"></div>
+            <span style="font-size: 13px; color: var(--text-secondary); font-weight: 500;">👤 {{ user.full_name }}</span>
+            <a href="/profile" class="tv-btn">Profile</a>
+            <a href="/logout" class="tv-btn danger">Log Out</a>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="header-section">
+            <h2>📜 Trade Audit Log History</h2>
+        </div>
+
+        <!-- Filters Form -->
+        <div class="filters-panel">
+            <div class="filter-group">
+                <label>Search symbol/strategy</label>
+                <input type="text" id="filter-search" placeholder="Search SENSEX, CE, strategy...">
+            </div>
+            <div class="filter-group">
+                <label>Status</label>
+                <select id="filter-status">
+                    <option value="">All</option>
+                    <option value="RUNNING">Running</option>
+                    <option value="CLOSED">Closed</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Start Date</label>
+                <input type="date" id="filter-start-date">
+            </div>
+            <div class="filter-group">
+                <label>End Date</label>
+                <input type="date" id="filter-end-date">
+            </div>
+            <div class="filter-group">
+                <label>Sort By</label>
+                <select id="filter-sort">
+                    <option value="entry_time_desc">Entry Time (Newest)</option>
+                    <option value="entry_time_asc">Entry Time (Oldest)</option>
+                    <option value="exit_time_desc">Exit Time (Newest)</option>
+                    <option value="pnl_desc">PnL (Highest)</option>
+                    <option value="pnl_asc">PnL (Lowest)</option>
+                    <option value="qty_desc">Qty (Highest)</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Trades Table -->
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Strategy</th>
+                        <th>Symbols</th>
+                        <th>Type</th>
+                        <th>Qty</th>
+                        <th>Entry Time</th>
+                        <th>Exit Time</th>
+                        <th>Entry Price</th>
+                        <th>Exit Price</th>
+                        <th>SL / Target</th>
+                        <th>PnL</th>
+                        <th>Status</th>
+                        <th>Exit Reason</th>
+                    </tr>
+                </thead>
+                <tbody id="history-tbody">
+                    <tr>
+                        <td colspan="12" style="text-align: center; color: var(--text-secondary); padding: 30px;">Loading historical trades...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination-panel">
+            <span id="page-indicator">Showing 0 of 0 trades</span>
+            <div class="pagination-btns">
+                <button id="btn-prev" class="pagination-btn" disabled>◀ Previous</button>
+                <button id="btn-next" class="pagination-btn" disabled>Next ▶</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentPage = 1;
+        const perPage = 10;
+        
+        async function fetchHistory() {
+            const search = document.getElementById('filter-search').value;
+            const status = document.getElementById('filter-status').value;
+            const startDate = document.getElementById('filter-start-date').value;
+            const endDate = document.getElementById('filter-end-date').value;
+            const sortBy = document.getElementById('filter-sort').value;
+            
+            let url = `/api/trades?page=${currentPage}&per_page=${perPage}`;
+            if (status) url += `&status=${status}`;
+            if (search) url += `&search=${encodeURIComponent(search)}`;
+            if (startDate) url += `&start_date=${startDate}`;
+            if (endDate) url += `&end_date=${endDate}`;
+            if (sortBy) url += `&sort_by=${sortBy}`;
+            
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    renderTable(data.trades);
+                    updatePagination(data.total);
+                } else {
+                    console.error('Failed to load history', data.message);
+                }
+            } catch(e) {
+                console.error('Fetch history error', e);
+            }
+        }
+        
+        function renderTable(trades) {
+            const tbody = document.getElementById('history-tbody');
+            tbody.innerHTML = '';
+            
+            if (trades.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="12" style="text-align: center; color: var(--text-secondary); padding: 30px;">No historical trades found.</td></tr>`;
+                return;
+            }
+            
+            trades.forEach(t => {
+                const tr = document.createElement('tr');
+                tr.addEventListener('click', () => {
+                    window.location.href = `/trades/${t.id}`;
+                });
+                
+                // Format P&L
+                let pnlClass = 'pnl-val';
+                let pnlSign = '';
+                if (t.status === 'CLOSED') {
+                    pnlClass += t.pnl > 0 ? ' profit' : (t.pnl < 0 ? ' loss' : '');
+                    pnlSign = t.pnl > 0 ? '+' : '';
+                }
+                const pnlText = t.status === 'CLOSED' ? `${pnlSign}₹${t.pnl.toFixed(2)}` : '—';
+                
+                // Format SL and Target
+                const slText = t.stop_loss ? t.stop_loss.toFixed(2) : '—';
+                const targetText = t.target ? t.target.toFixed(2) : '—';
+                
+                // Symbols text
+                let symbolsText = '';
+                if (t.call_symbol && t.put_symbol) {
+                    symbolsText = `C: ${t.call_symbol}<br>P: ${t.put_symbol}`;
+                } else if (t.call_symbol) {
+                    symbolsText = `CE: ${t.call_symbol}`;
+                } else if (t.put_symbol) {
+                    symbolsText = `PE: ${t.put_symbol}`;
+                }
+                
+                tr.innerHTML = `
+                    <td><strong>${t.strategy_name || 'Manual'}</strong></td>
+                    <td style="font-size:11px;">${symbolsText}</td>
+                    <td><span style="font-weight:600; color: ${t.direction === 'BUY' ? 'var(--up-color)' : 'var(--down-color)'};">${t.direction}</span></td>
+                    <td>${t.quantity}</td>
+                    <td>${t.entry_time}</td>
+                    <td>${t.exit_time || '—'}</td>
+                    <td>₹${t.entry_price.toFixed(2)}</td>
+                    <td>${t.exit_price ? '₹' + t.exit_price.toFixed(2) : '—'}</td>
+                    <td>SL: ${slText}<br>TG: ${targetText}</td>
+                    <td><span class="${pnlClass}">${pnlText}</span></td>
+                    <td><span class="badge ${t.status.toLowerCase()}">${t.status}</span></td>
+                    <td><span style="font-size:11px; color: var(--text-secondary);">${t.exit_reason || '—'}</span></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+        
+        function updatePagination(total) {
+            const pageIndicator = document.getElementById('page-indicator');
+            const totalPages = Math.ceil(total / perPage);
+            
+            const start = total === 0 ? 0 : (currentPage - 1) * perPage + 1;
+            const end = Math.min(currentPage * perPage, total);
+            
+            pageIndicator.textContent = `Showing ${start} to ${end} of ${total} trades (Page ${currentPage} of ${totalPages || 1})`;
+            
+            document.getElementById('btn-prev').disabled = currentPage <= 1;
+            document.getElementById('btn-next').disabled = currentPage >= totalPages;
+        }
+        
+        // Event Listeners
+        document.getElementById('filter-search').addEventListener('input', () => { currentPage = 1; fetchHistory(); });
+        document.getElementById('filter-status').addEventListener('change', () => { currentPage = 1; fetchHistory(); });
+        document.getElementById('filter-start-date').addEventListener('change', () => { currentPage = 1; fetchHistory(); });
+        document.getElementById('filter-end-date').addEventListener('change', () => { currentPage = 1; fetchHistory(); });
+        document.getElementById('filter-sort').addEventListener('change', () => { currentPage = 1; fetchHistory(); });
+        
+        document.getElementById('btn-prev').addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage--;
+                fetchHistory();
+            }
+        });
+        
+        document.getElementById('btn-next').addEventListener('click', () => {
+            currentPage++;
+            fetchHistory();
+        });
+        
+        // Initial Fetch
+        document.addEventListener('DOMContentLoaded', fetchHistory);
+    </script>
+</body>
+</html>

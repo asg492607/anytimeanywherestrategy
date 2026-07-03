@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profile — Option Analysis Terminal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0e14;
+            --panel-bg: #131722;
+            --text-color: #d1d4dc;
+            --border-color: #2a2e39;
+            --primary: #2962ff;
+            --primary-hover: #1e53e5;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 10% 20%, rgba(41, 98, 255, 0.05) 0px, transparent 50%),
+                radial-gradient(at 90% 80%, rgba(8, 153, 129, 0.03) 0px, transparent 50%);
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .profile-container {
+            background: rgba(19, 23, 34, 0.85);
+            backdrop-filter: blur(12px);
+            padding: 40px;
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+            width: 420px;
+            box-sizing: border-box;
+            animation: fadeIn 0.4s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        h2 {
+            margin-top: 0;
+            margin-bottom: 24px;
+            color: white;
+            font-size: 22px;
+            font-weight: 700;
+            text-align: center;
+        }
+        .avatar-circle {
+            width: 70px;
+            height: 70px;
+            background: var(--primary);
+            color: white;
+            font-size: 28px;
+            font-weight: 700;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-radius: 50%;
+            margin: 0 auto 24px auto;
+            box-shadow: 0 0 20px rgba(41, 98, 255, 0.4);
+        }
+        .profile-field {
+            border-bottom: 1px solid var(--border-color);
+            padding: 12px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+        }
+        .profile-field:last-of-type {
+            border-bottom: none;
+            margin-bottom: 24px;
+        }
+        .field-label {
+            color: #787b86;
+            font-weight: 500;
+        }
+        .field-value {
+            color: white;
+            font-weight: 600;
+            text-align: right;
+        }
+        .btn-group {
+            display: flex;
+            gap: 12px;
+        }
+        .btn {
+            flex: 1;
+            padding: 12px;
+            text-align: center;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-sizing: border-box;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            border: none;
+        }
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
+        .btn-secondary {
+            background: transparent;
+            color: #787b86;
+            border: 1px solid var(--border-color);
+        }
+        .btn-secondary:hover {
+            color: white;
+            border-color: #787b86;
+            background: rgba(255,255,255,0.02);
+        }
+    </style>
+</head>
+<body>
+    <div class="profile-container">
+        <div class="avatar-circle">
+            {{ user.full_name[0] | upper if user.full_name else 'U' }}
+        </div>
+        <h2>User Profile</h2>
+        
+        <div class="profile-field">
+            <span class="field-label">User ID</span>
+            <span class="field-value">#{{ user.id }}</span>
+        </div>
+        <div class="profile-field">
+            <span class="field-label">Full Name</span>
+            <span class="field-value">{{ user.full_name }}</span>
+        </div>
+        <div class="profile-field">
+            <span class="field-label">Email Address</span>
+            <span class="field-value">{{ user.email }}</span>
+        </div>
+        <div class="profile-field">
+            <span class="field-label">Created At</span>
+            <span class="field-value">{{ user.created_at }}</span>
+        </div>
+        <div class="profile-field">
+            <span class="field-label">Last Login</span>
+            <span class="field-value">{{ user.last_login or 'First Session' }}</span>
+        </div>
+
+        <div class="btn-group">
+            <a href="/dashboard" class="btn btn-primary">Dashboard</a>
+            <a href="/logout" class="btn btn-secondary">Log Out</a>
+        </div>
+    </div>
+</body>
+</html>

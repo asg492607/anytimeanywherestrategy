@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trade Details — Option Analysis Terminal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0e14;
+            --panel-bg: #131722;
+            --text-primary: #d1d4dc;
+            --text-secondary: #787b86;
+            --border-color: #2a2e39;
+            --primary: #2962ff;
+            --primary-hover: #1e53e5;
+            --up-color: #089981;
+            --down-color: #f23645;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .top-nav {
+            height: 50px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 20px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+        .tv-btn {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border-color);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s ease;
+        }
+        .tv-btn:hover { background: rgba(255,255,255,0.1); }
+        .tv-btn.danger { background: var(--down-color); border: none; font-weight: 600; }
+        
+        .main-container {
+            flex: 1;
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+            overflow: hidden;
+            box-sizing: border-box;
+        }
+        
+        /* Column 1: Trade Info */
+        .info-panel {
+            flex: 1.2;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 25px;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+        .panel-header h2 {
+            margin: 0;
+            color: white;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .badge {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .badge.running { background: rgba(41, 98, 255, 0.15); color: #64b5f6; }
+        .badge.closed { background: rgba(120, 123, 134, 0.15); color: #b2b5be; }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .info-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .info-value {
+            font-size: 14px;
+            color: white;
+            font-weight: 600;
+        }
+        
+        /* Column 2: Event Timeline */
+        .timeline-panel {
+            flex: 1;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 25px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .timeline-container {
+            flex: 1;
+            overflow-y: auto;
+            position: relative;
+            padding-left: 20px;
+            margin-top: 10px;
+        }
+        .timeline-container::before {
+            content: '';
+            position: absolute;
+            top: 5px;
+            bottom: 5px;
+            left: 5px;
+            width: 2px;
+            background: var(--border-color);
+        }
+        .timeline-item {
+            position: relative;
+            margin-bottom: 20px;
+        }
+        .timeline-dot {
+            position: absolute;
+            left: -20px;
+            top: 4px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--border-color);
+            border: 2px solid var(--panel-bg);
+            z-index: 2;
+        }
+        .timeline-item.created .timeline-dot { background: var(--primary); }
+        .timeline-item.updated .timeline-dot { background: #ff9800; }
+        .timeline-item.closed .timeline-dot { background: var(--up-color); }
+        
+        .timeline-content {
+            background: rgba(255,255,255,0.01);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+        .timeline-time {
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        .timeline-title {
+            font-weight: 600;
+            font-size: 12px;
+            color: white;
+            margin-bottom: 2px;
+        }
+        .timeline-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        
+        /* P&L Callout */
+        .pnl-box {
+            border-radius: 8px;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: auto;
+        }
+        .pnl-box.profit { background: rgba(8, 153, 129, 0.08); border: 1px solid rgba(8, 153, 129, 0.2); }
+        .pnl-box.loss { background: rgba(242, 54, 69, 0.08); border: 1px solid rgba(242, 54, 69, 0.2); }
+        .pnl-box.flat { background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); }
+        
+        .exit-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: flex-end;
+        }
+    </style>
+</head>
+<body>
+    <div class="top-nav">
+        <div style="font-weight: 600; font-size: 16px; color: white;">Institutional Trading Terminal</div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <a href="/dashboard" class="tv-btn">📊 Dashboard</a>
+            <a href="/trades/history" class="tv-btn">📜 History</a>
+            <div style="height: 20px; width: 1px; background: var(--border-color);"></div>
+            <span style="font-size: 13px; color: var(--text-secondary); font-weight: 500;">👤 {{ user.full_name }}</span>
+            <a href="/profile" class="tv-btn">Profile</a>
+            <a href="/logout" class="tv-btn danger">Log Out</a>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <!-- Trade Details Card -->
+        <div class="info-panel">
+            <div class="panel-header">
+                <h2>Trade #<span id="trade-id-lbl">-</span></h2>
+                <span id="status-badge" class="badge">-</span>
+            </div>
+            
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Strategy</span>
+                    <span class="info-value" id="strategy-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Broker</span>
+                    <span class="info-value" id="broker-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Underlying</span>
+                    <span class="info-value" id="underlying-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Type</span>
+                    <span class="info-value" id="direction-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Call Symbol</span>
+                    <span class="info-value" id="ce-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Put Symbol</span>
+                    <span class="info-value" id="pe-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Quantity</span>
+                    <span class="info-value" id="qty-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Expiry</span>
+                    <span class="info-value" id="expiry-lbl">-</span>
+                </div>
+            </div>
+            
+            <div class="panel-header" style="border-top: 1px solid var(--border-color); padding-top: 15px; margin-bottom: 20px;">
+                <h2>Pricing Details</h2>
+            </div>
+            
+            <div class="info-grid" style="margin-bottom: 10px;">
+                <div class="info-item">
+                    <span class="info-label">Entry Price</span>
+                    <span class="info-value" id="entry-price-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Exit Price</span>
+                    <span class="info-value" id="exit-price-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Stop Loss</span>
+                    <span class="info-value" id="sl-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Target</span>
+                    <span class="info-value" id="target-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Entry Time</span>
+                    <span class="info-value" id="entry-time-lbl">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Exit Time</span>
+                    <span class="info-value" id="exit-time-lbl">-</span>
+                </div>
+            </div>
+            
+            <!-- PnL box -->
+            <div id="pnl-summary-box" class="pnl-box flat">
+                <div>
+                    <div style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase; font-weight:600; letter-spacing:0.5px;">Profit & Loss</div>
+                    <div id="pnl-title" style="font-size: 12px; color: var(--text-secondary); margin-top:2px;">Realised P&L</div>
+                </div>
+                <div id="pnl-val" style="font-size: 20px; font-weight: 700; color: white;">₹0.00</div>
+            </div>
+            
+            <!-- Exit Section (for Running Trades) -->
+            <div id="exit-section" class="exit-section" style="display: none;">
+                <button id="btn-manual-exit" class="tv-btn danger" style="padding: 10px 24px; font-size:14px;">🚨 Exit Position</button>
+            </div>
+        </div>
+
+        <!-- Event Timeline -->
+        <div class="timeline-panel">
+            <div class="panel-header">
+                <h2>📋 Event Audit Timeline</h2>
+            </div>
+            <div class="timeline-container" id="timeline-container">
+                <div style="color: var(--text-secondary); text-align: center; padding-top: 30px; font-size: 13px;">Loading events...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const tradeId = Number('{{ trade_id }}');
+        let activePollTimer = null;
+        let lastExitLtp = 0.0;
+        
+        async function loadTradeDetails() {
+            try {
+                const response = await fetch(`/api/trades/${tradeId}`);
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    renderTrade(data.trade);
+                    renderTimeline(data.logs);
+                    
+                    if (data.trade.status === 'RUNNING') {
+                        // Start polling live prices for live P&L calculation
+                        startLivePnLPoll();
+                    }
+                } else {
+                    console.error('Failed to load trade', data.message);
+                }
+            } catch(e) {
+                console.error(e);
+            }
+        }
+        
+        function renderTrade(t) {
+            document.getElementById('trade-id-lbl').textContent = t.id;
+            document.getElementById('strategy-lbl').textContent = t.strategy_name || 'Manual';
+            document.getElementById('broker-lbl').textContent = t.broker === 'angelone' ? 'Angel One' : t.broker;
+            document.getElementById('underlying-lbl').textContent = t.underlying;
+            document.getElementById('direction-lbl').textContent = t.direction;
+            document.getElementById('ce-lbl').textContent = t.call_symbol || '—';
+            document.getElementById('pe-lbl').textContent = t.put_symbol || '—';
+            document.getElementById('qty-lbl').textContent = t.quantity;
+            document.getElementById('expiry-lbl').textContent = t.expiry || '—';
+            
+            document.getElementById('entry-price-lbl').textContent = `₹${t.entry_price.toFixed(2)}`;
+            document.getElementById('exit-price-lbl').textContent = t.exit_price ? `₹${t.exit_price.toFixed(2)}` : '—';
+            document.getElementById('sl-lbl').textContent = t.stop_loss ? `₹${t.stop_loss.toFixed(2)}` : '—';
+            document.getElementById('target-lbl').textContent = t.target ? `₹${t.target.toFixed(2)}` : '—';
+            
+            document.getElementById('entry-time-lbl').textContent = t.entry_time;
+            document.getElementById('exit-time-lbl').textContent = t.exit_time || '—';
+            
+            const badge = document.getElementById('status-badge');
+            badge.className = `badge ${t.status.toLowerCase()}`;
+            badge.textContent = t.status;
+            
+            const pnlBox = document.getElementById('pnl-summary-box');
+            const pnlVal = document.getElementById('pnl-val');
+            const pnlTitle = document.getElementById('pnl-title');
+            
+            if (t.status === 'CLOSED') {
+                pnlTitle.textContent = `REALISED P&L (${t.exit_reason || 'Manual Exit'})`;
+                pnlVal.textContent = `${t.pnl >= 0 ? '+' : ''}₹${t.pnl.toFixed(2)}`;
+                pnlBox.className = `pnl-box ${t.pnl > 0 ? 'profit' : (t.pnl < 0 ? 'loss' : 'flat')}`;
+                document.getElementById('exit-section').style.display = 'none';
+            } else {
+                pnlTitle.textContent = 'UNREALISED P&L (LIVE)';
+                document.getElementById('exit-section').style.display = 'flex';
+            }
+        }
+        
+        function renderTimeline(logs) {
+            const container = document.getElementById('timeline-container');
+            container.innerHTML = '';
+            
+            if (logs.length === 0) {
+                container.innerHTML = `<div style="color: var(--text-secondary); text-align: center; padding-top: 30px; font-size: 12px;">No events recorded.</div>`;
+                return;
+            }
+            
+            logs.forEach(log => {
+                const item = document.createElement('div');
+                let logTypeClass = 'created';
+                if (log.event_type.includes('Updated')) logTypeClass = 'updated';
+                if (log.event_type.includes('Closed')) logTypeClass = 'closed';
+                
+                item.className = `timeline-item ${logTypeClass}`;
+                
+                const priceTxt = log.price ? `<div style="font-size:11px; margin-top:2px; font-weight:600; color:white;">Reference Price: ₹${log.price.toFixed(2)}</div>` : '';
+                
+                item.innerHTML = `
+                    <div class="timeline-dot"></div>
+                    <div class="timeline-content">
+                        <div class="timeline-time">${log.timestamp}</div>
+                        <div class="timeline-title">${log.event_type}</div>
+                        <div class="timeline-desc">${log.description}</div>
+                        ${priceTxt}
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+        
+        function startLivePnLPoll() {
+            if (activePollTimer) clearInterval(activePollTimer);
+            
+            activePollTimer = setInterval(async () => {
+                try {
+                    const response = await fetch('/api/trades/pnl');
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        // Find this trade inside running trades
+                        const activeTrade = data.running_trades.find(rt => rt.id === tradeId);
+                        if (activeTrade) {
+                            const pnlBox = document.getElementById('pnl-summary-box');
+                            const pnlVal = document.getElementById('pnl-val');
+                            
+                            pnlVal.textContent = `${activeTrade.pnl >= 0 ? '+' : ''}₹${activeTrade.pnl.toFixed(2)}`;
+                            pnlBox.className = `pnl-box ${activeTrade.pnl > 0 ? 'profit' : (activeTrade.pnl < 0 ? 'loss' : 'flat')}`;
+                            
+                            // Save current price to close trade if exit is clicked
+                            lastExitLtp = activeTrade.current_price;
+                        } else {
+                            // Trade has closed! Stop polling and reload details
+                            clearInterval(activePollTimer);
+                            loadTradeDetails();
+                        }
+                    }
+                } catch(e) {
+                    console.error('Error polling live PnL in details page', e);
+                }
+            }, 1000);
+        }
+        
+        // Manual Exit Action
+        document.getElementById('btn-manual-exit').addEventListener('click', async () => {
+            if (confirm("Are you sure you want to manually close this trade at the current market price?")) {
+                try {
+                    const response = await fetch(`/api/trades/${tradeId}/close`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ exit_price: lastExitLtp, exit_reason: 'Manual Exit via Details Page' })
+                    });
+                    const res = await response.json();
+                    
+                    if (res.status === 'success') {
+                        alert(`Position closed successfully! Realised P&L: ₹${res.pnl.toFixed(2)}`);
+                        clearInterval(activePollTimer);
+                        loadTradeDetails();
+                    } else {
+                        alert(`Failed to close trade: ${res.message}`);
+                    }
+                } catch(e) {
+                    console.error('Error closing trade', e);
+                }
+            }
+        });
+        
+        document.addEventListener('DOMContentLoaded', loadTradeDetails);
+    </script>
+</body>
+</html>
