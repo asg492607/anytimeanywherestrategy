@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+tokens_cache.json
+.env
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+
+# SQLite databases (auto-created at runtime, not tracked)
+*.db
+*.db-shm
+*.db-wal
+
+# pytest
+.pytest_cache/

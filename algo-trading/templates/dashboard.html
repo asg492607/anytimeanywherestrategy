@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Option Co-Movement Analysis Dashboard</title>
+    <!-- Lightweight Charts for trading views (Locked to v4.1.1) -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=1.5">
+    <script>
+        // Protective stubs to catch early UI clicks before main.js is fully downloaded and parsed.
+        // Once main.js executes, these global definitions will be naturally overwritten.
+        function toggleMonitorDrawer(tab) {
+            console.warn("App is still loading...");
+            showLoadingToast();
+        }
+        function closeMonitorDrawer() {
+            console.warn("App is still loading...");
+        }
+        function saveConfig() {
+            console.warn("App is still loading...");
+            showLoadingToast();
+        }
+        function showLoadingToast() {
+            if (window.showToast) {
+                window.showToast('⏳ System is still loading, please wait...', 'buy');
+            } else {
+                alert('⏳ System is still loading, please wait a moment for the connection to establish.');
+            }
+        }
+    </script>
+</head>
+<body>
+    <!-- STRATEGY SIGNAL BANNER -->
+    <div id="strategy-banner" class="strategy-banner hidden">
+        <div class="banner-content">
+            <span class="pulse-dot"></span>
+            <strong>🚨 TRADE OPPORTUNITY DETECTED</strong>
+            <span class="divider">|</span>
+            <span id="banner-symbol" class="highlight"></span>
+            <span class="divider">|</span>
+            <span>ENTRY: <strong id="banner-entry"></strong></span>
+            <span>SL: <strong id="banner-sl"></strong></span>
+            <span>TARGET: <strong id="banner-tp"></strong></span>
+        </div>
+    </div>
+
+    <div class="top-nav" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; background: #ffffff; border-bottom: 1px solid #e0e3eb;">
+        <div style="font-weight: 600; font-size: 16px; color: #131722;">Institutional Trading Terminal</div>
+        <div class="search-container" style="position: relative;">
+            <input type="text" id="contract-search" class="tv-btn" placeholder="Search Contract..." style="width: 300px; background: #f8f9fa; border: 1px solid #e0e3eb; padding-left: 10px; cursor: text; color: #131722;">
+            <div id="autocomplete-results" style="display: none; position: absolute; top: 100%; left: 0; width: 100%; background: white; border: 1px solid #e0e3eb; border-radius: 4px; max-height: 200px; overflow-y: auto; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 5px;"></div>
+        </div>
+        <div style="display: flex; gap: 5px; background: #f8f9fa; padding: 4px; border: 1px solid #e0e3eb; border-radius: 4px;">
+            <button class="tv-btn timeframe-btn active" data-tf="3m" style="padding: 4px 12px;">3m</button>
+            <button class="tv-btn timeframe-btn" data-tf="1d" style="padding: 4px 12px;">1D</button>
+            <button class="tv-btn timeframe-btn" data-tf="1w" style="padding: 4px 12px;">1W</button>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <!-- Notification Bell -->
+            <div style="position: relative; cursor: pointer;" onclick="toggleMonitorDrawer('notifications')" title="Notifications">
+                <span style="font-size: 18px;">🔔</span>
+                <span id="notif-badge" style="position: absolute; top: -4px; right: -6px; background: #f23645; color: white; font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 8px; display: none;">0</span>
+            </div>
+            <!-- System Health Indicator -->
+            <div style="display: flex; align-items: center; gap: 6px; background: #f8f9fa; border: 1px solid #e0e3eb; border-radius: 4px; padding: 4px 10px; cursor: pointer;" onclick="toggleMonitorDrawer('health')" title="System Health">
+                <span id="nav-health-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #089981; display: inline-block;"></span>
+                <span id="nav-health-lbl" style="font-size: 11px; font-weight: 600; color: #131722;">SYSTEM OK</span>
+            </div>
+            <button class="tv-btn" onclick="toggleMonitorDrawer('analytics')" style="font-size: 12px; padding: 4px 10px;">📊 Analytics</button>
+            <div style="height: 20px; width: 1px; background: #e0e3eb;"></div>
+            <span style="font-size: 13px; color: #787b86; font-weight: 500;">👤 {{ user.full_name }}</span>
+            <a href="/profile" class="tv-btn" style="text-decoration: none; font-size: 13px; background: #f8f9fa; color: #131722; border: 1px solid #e0e3eb; border-radius: 4px; padding: 4px 12px; font-weight: 500; transition: all 0.2s;">Profile</a>
+            <a href="/trades/history" class="tv-btn" style="text-decoration: none; font-size: 13px; background: #f8f9fa; color: #131722; border: 1px solid #e0e3eb; border-radius: 4px; padding: 4px 12px; font-weight: 500; transition: all 0.2s;">📜 Trades</a>
+            <a href="/logout" class="tv-btn" style="text-decoration: none; font-size: 13px; background: #f23645; color: white; border: none; border-radius: 4px; padding: 5px 12px; font-weight: 600; transition: all 0.2s;">Log Out</a>
+        </div>
+    </div>
+
+    <!-- SYSTEM HEALTH STATUS STRIP RESTORED FOR AUTOMATION -->
+    <div id="health-strip" style="display: none; background: #131722; color: #adb7c9; font-size: 11px; font-weight: 500; padding: 5px 20px; gap: 20px; align-items: center; justify-content: space-between; border-bottom: 1px solid #2a2e39;">
+        <div style="display: flex; gap: 20px;">
+            <span>Broker: <strong id="hs-broker" style="color:#089981;">● CONNECTED</strong></span>
+            <span>WebSocket: <strong id="hs-ws" style="color:#089981;">● LIVE</strong></span>
+            <span>DB: <strong id="hs-db" style="color:#089981;">● HEALTHY</strong></span>
+            <span>Cache: <strong id="hs-cache" style="color:#089981;">● WARM</strong></span>
+        </div>
+        <div style="display: flex; gap: 20px;">
+            <span>CPU: <strong id="hs-cpu">--</strong></span>
+            <span>Mem: <strong id="hs-mem">--</strong></span>
+            <span>API Latency: <strong id="hs-api-lat">--</strong></span>
+            <span>Last Tick: <strong id="hs-tick">--</strong></span>
+        </div>
+    </div>
+
+    <!-- SUMMARY CARDS ROW -->
+    <div class="summary-cards-container" style="display: flex; gap: 15px; padding: 15px 20px; background: #ffffff; border-bottom: 1px solid #e0e3eb; flex-shrink: 0; overflow-x: auto;">
+        <!-- Card 1: Running P&L -->
+        <div class="summary-card" style="flex: 1; min-width: 140px; background: #f8f9fa; border: 1px solid #e0e3eb; border-radius: 8px; padding: 12px 16px;">
+            <div style="font-size: 11px; color: #787b86; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px;">Running P&L</div>
+            <div id="card-running-pnl" style="font-size: 18px; font-weight: 700; color: #131722;">₹0.00</div>
+        </div>
+        <!-- Card 2: Closed P&L -->
+        <div class="summary-card" style="flex: 1; min-width: 140px; background: #f8f9fa; border: 1px solid #e0e3eb; border-radius: 8px; padding: 12px 16px;">
+            <div style="font-size: 11px; color: #787b86; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px;">Closed P&L</div>
+            <div id="card-closed-pnl" style="font-size: 18px; font-weight: 700; color: #131722;">₹0.00</div>
+        </div>
+        <!-- Card 3: Today's P&L -->
+        <div class="summary-card" style="flex: 1; min-width: 140px; background: #f8f9fa; border: 1px solid #e0e3eb; border-radius: 8px; padding: 12px 16px;">
+            <div style="font-size: 11px; color: #787b86; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px;">Today's P&L</div>
+            <div id="card-today-pnl" style="font-size: 18px; font-weight: 700; color: #131722;">₹0.00</div>
+        </div>
+        <!-- Card 4: Total P&L -->
+        <div class="summary-card" style="flex: 1; min-width: 140px; background: #f8f9fa; border: 1px solid #e0e3eb; border-radius: 8px; padding: 12px 16px;">
+            <div style="font-size: 11px; color: #787b86; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px;">Total P&L</div>
+            <div id="card-total-pnl" style="font-size: 18px; font-weight: 700; color: #131722;">₹0.00</div>
+        </div>
+        <!-- Card 5: Trade Stats -->
+        <div class="summary-card" style="flex: 1.3; min-width: 210px; background: #f8f9fa; border: 1px solid #e0e3eb; border-radius: 8px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <div style="font-size: 11px; color: #787b86; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px;">Win Rate</div>
+                <div id="card-win-rate" style="font-size: 18px; font-weight: 700; color: #131722;">0.0%</div>
+            </div>
+            <div style="text-align: right; font-size: 12px; color: #787b86; display: flex; flex-direction: column; gap: 2px;">
+                <div>Total Trades: <strong id="card-total-trades" style="color: #131722;">0</strong></div>
+                <div>Win/Loss: <span id="card-wl-ratio" style="font-weight: 600; color: #131722;">0W / 0L</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CONFIRMATION TIMELINE BAR -->
+    <div id="confirmation-timeline-bar" style="background: #ffffff; border: 1px solid #e0e3eb; border-radius: 8px; padding: 10px 20px; margin: 0 20px 10px 20px; display: none; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 500; color: #131722; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <span style="font-size: 14px; font-weight: 700; color: #2962ff;">⚡ CONFIRMATION SESSION #<span id="timeline-id">--</span></span>
+            <span class="badge" id="timeline-status-badge" style="background: rgba(41, 98, 255, 0.15); color: #2962ff; font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 11px;">WAITING</span>
+        </div>
+        <!-- Visual Timeline Indicators -->
+        <div style="display: flex; gap: 20px; align-items: center;">
+            <div id="timeline-call" style="display: flex; align-items: center; gap: 6px; color: #787b86;">
+                <span>CALL:</span> <strong style="color: #ff9800;" id="timeline-call-lbl">WAITING ⏳</strong>
+            </div>
+            <div style="color: #e0e3eb;">|</div>
+            <div id="timeline-spot" style="display: flex; align-items: center; gap: 6px; color: #787b86;">
+                <span>SPOT:</span> <strong style="color: #ff9800;" id="timeline-spot-lbl">WAITING ⏳</strong>
+            </div>
+            <div style="color: #e0e3eb;">|</div>
+            <div id="timeline-put" style="display: flex; align-items: center; gap: 6px; color: #787b86;">
+                <span>PUT:</span> <strong style="color: #ff9800;" id="timeline-put-lbl">WAITING ⏳</strong>
+            </div>
+        </div>
+        <!-- Remaining Time Tracker -->
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="color: #787b86;">Remaining:</span>
+            <strong id="timeline-timer" style="color: #f23645; font-size: 14px;">30s</strong>
+        </div>
+    </div>
+
+    <div class="dashboard">
+        <!-- LEFT PANEL: CALL OPTION -->
+        <div class="panel left-panel">
+            <div id="call-3m-chart" class="chart-container"></div>
+        </div>
+
+        <!-- CENTER PANEL: SENSEX -->
+        <div class="panel center-panel" style="border-left: 1px solid #2962ff; border-right: 1px solid #2962ff;">
+            <div id="sensex-3m-chart" class="chart-container"></div>
+        </div>
+
+        <!-- RIGHT PANEL: PUT OPTION -->
+        <div class="panel right-panel">
+            <div id="put-3m-chart" class="chart-container"></div>
+        </div>
+    </div>
+    
+    <!-- BOTTOM MONITORING DOCKS -->
+    <div id="monitoring-dock" style="height: 130px; border-top: 1px solid #e0e3eb; background: #ffffff; display: flex; flex-shrink: 0;">
+        <!-- Left: Active Trades Table -->
+        <div style="flex: 1.2; display: flex; flex-direction: column; border-right: 1px solid #e0e3eb; overflow: hidden;">
+            <div style="padding: 6px 20px; background: #f8f9fa; border-bottom: 1px solid #e0e3eb; font-size: 11px; font-weight: 700; color: #787b86; display: flex; justify-content: space-between; align-items: center; letter-spacing: 0.5px;">
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <span id="trades-view-tab-pnl" style="cursor: pointer; color: #2962ff; border-bottom: 2px solid #2962ff; padding-bottom: 2px;" onclick="switchTradesTab('pnl')">🏃 ACTIVE POSITIONS</span>
+                    <span id="trades-view-tab-sl" style="cursor: pointer; color: #787b86; padding-bottom: 2px;" onclick="switchTradesTab('sl')">🛡️ SL MONITOR</span>
+                    <span id="trades-view-tab-target" style="cursor: pointer; color: #787b86; padding-bottom: 2px;" onclick="switchTradesTab('target')">🎯 TARGET MONITOR</span>
+                </div>
+                <span id="running-count-badge" style="background: #2962ff; color: white; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700;">0</span>
+            </div>
+            <div style="flex: 1; overflow-y: auto; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; white-space: nowrap;">
+                    <thead id="running-trades-thead">
+                        <tr style="background: #ffffff; color: #787b86; border-bottom: 1px solid #e0e3eb; height: 26px;">
+                            <th style="padding: 4px 20px; font-weight: 500;">Strategy</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Symbol</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Type</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Qty</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Entry Price</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Current Price</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Live P&L</th>
+                            <th style="padding: 4px 20px; font-weight: 500; text-align: right;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="running-trades-tbody">
+                        <tr>
+                            <td colspan="8" style="text-align: center; color: #787b86; padding: 20px;">No active running trades.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Center: Reference Box Status Panel -->
+        <div style="flex: 1; display: flex; flex-direction: column; border-right: 1px solid #e0e3eb; overflow: hidden;">
+            <div style="padding: 6px 20px; background: #f8f9fa; border-bottom: 1px solid #e0e3eb; font-size: 11px; font-weight: 700; color: #787b86; display: flex; justify-content: space-between; align-items: center; letter-spacing: 0.5px;">
+                <span>📦 ACTIVE REFERENCE BOXES</span>
+                <span id="ref-box-count-badge" style="background: #2962ff; color: white; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700;">0</span>
+            </div>
+            <div style="flex: 1; overflow-y: auto; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; white-space: nowrap;">
+                    <thead>
+                        <tr style="background: #ffffff; color: #787b86; border-bottom: 1px solid #e0e3eb; height: 26px;">
+                            <th style="padding: 4px 20px; font-weight: 500;">Chart</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Level</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Upper Boundary</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Lower Boundary</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Status</th>
+                            <th style="padding: 4px 20px; font-weight: 500; text-align: right;">Creation Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="reference-boxes-tbody">
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: #787b86; padding: 20px;">No active reference boxes.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Right: Buy Signal Status Panel -->
+        <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+            <div style="padding: 6px 20px; background: #f8f9fa; border-bottom: 1px solid #e0e3eb; font-size: 11px; font-weight: 700; color: #787b86; display: flex; justify-content: space-between; align-items: center; letter-spacing: 0.5px;">
+                <span>⚡ BUY SIGNAL STATUS</span>
+                <span id="buy-signal-count-badge" style="background: #2962ff; color: white; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700;">0</span>
+            </div>
+            <div style="flex: 1; overflow-y: auto; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; white-space: nowrap;">
+                    <thead>
+                        <tr style="background: #ffffff; color: #787b86; border-bottom: 1px solid #e0e3eb; height: 26px;">
+                            <th style="padding: 4px 20px; font-weight: 500;">Chart</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Box ID</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Breakout Price</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Status</th>
+                            <th style="padding: 4px 20px; font-weight: 500;">Rejections</th>
+                            <th style="padding: 4px 20px; font-weight: 500; text-align: right;">Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="buy-signals-tbody">
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: #787b86; padding: 20px;">No active buy signals.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Right-most: Execution Status Panel -->
+        <div style="flex: 1.2; display: flex; flex-direction: column; border-left: 1px solid #e0e3eb; overflow: hidden;">
+            <div style="padding: 6px 20px; background: #f8f9fa; border-bottom: 1px solid #e0e3eb; font-size: 11px; font-weight: 700; color: #787b86; display: flex; justify-content: space-between; align-items: center; letter-spacing: 0.5px;">
+                <span>🛒 EXECUTION STATUS</span>
+                <span id="execution-count-badge" style="background: #2962ff; color: white; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700;">0</span>
+            </div>
+            <div style="flex: 1; overflow-y: auto; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; white-space: nowrap;">
+                    <thead>
+                        <tr style="background: #ffffff; color: #787b86; border-bottom: 1px solid #e0e3eb; height: 26px;">
+                            <th style="padding: 4px 10px; font-weight: 500;">Order ID</th>
+                            <th style="padding: 4px 10px; font-weight: 500;">Symbol</th>
+                            <th style="padding: 4px 10px; font-weight: 500;">Qty</th>
+                            <th style="padding: 4px 10px; font-weight: 500;">Req Px</th>
+                            <th style="padding: 4px 10px; font-weight: 500;">Exec Px</th>
+                            <th style="padding: 4px 10px; font-weight: 500;">Status</th>
+                            <th style="padding: 4px 10px; font-weight: 500; text-align: right;">Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="executions-tbody">
+                        <tr>
+                            <td colspan="7" style="text-align: center; color: #787b86; padding: 20px;">No executions recorded.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- UNIFIED FLAT EXECUTION DOCK -->
+    <div class="execution-panel">
+        <div class="exec-block" style="flex: 1; display: flex; gap: 10px; justify-content: center;">
+            <button class="exec-btn buy-btn">BUY CALL<br><span style="font-size:10px;font-weight:normal;">Req. Margin: ₹---</span></button>
+            <button class="exec-btn sell-btn">SELL CALL<br><span style="font-size:10px;font-weight:normal;">Req. Margin: ₹---</span></button>
+        </div>
+        
+        <div class="exec-block center-info" style="flex: 1; text-align: center; border-left: 1px solid #e0e3eb; border-right: 1px solid #e0e3eb; padding: 0 20px;">
+            <div class="spot-title" style="font-weight: 600; color: #131722; font-size: 14px; margin-bottom: 5px;">SENSEX <span style="color:#089981; font-weight:normal;" id="spot-price-lbl">---</span></div>
+            <div class="spot-pl" style="font-size: 13px; color: #787b86;">Unrealised G&L<br><strong style="color:#131722; font-size: 15px;">₹0.00</strong></div>
+        </div>
+
+        <div class="exec-block" style="flex: 1; display: flex; gap: 10px; justify-content: center;">
+            <button class="exec-btn buy-btn" style="background:#089981;">BUY PUT<br><span style="font-size:10px;font-weight:normal;">Req. Margin: ₹---</span></button>
+            <button class="exec-btn sell-btn" style="background:#f23645;">SELL PUT<br><span style="font-size:10px;font-weight:normal;">Req. Margin: ₹---</span></button>
+        </div>
+    </div>
+    
+    <div id="toast-container" style="position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px;"></div>
+
+    <!-- MONITORING SIDE DRAWER -->
+    <div id="monitor-drawer" style="position: fixed; top: 0; right: -440px; width: 440px; height: 100vh; background: #1e222d; border-left: 1px solid #2a2e39; z-index: 5000; transition: right 0.3s ease; display: flex; flex-direction: column; box-shadow: -4px 0 20px rgba(0,0,0,0.4);">
+        <!-- Drawer Header -->
+        <div style="padding: 16px 20px; border-bottom: 1px solid #2a2e39; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+            <div style="font-weight: 700; font-size: 14px; color: #d1d4dc;">📊 Strategy Monitor</div>
+            <button onclick="closeMonitorDrawer()" style="background: none; border: none; color: #787b86; font-size: 18px; cursor: pointer; padding: 0;">✕</button>
+        </div>
+        <!-- Drawer Tabs -->
+        <div style="display: flex; border-bottom: 1px solid #2a2e39; flex-shrink: 0;">
+            <button class="drawer-tab active" id="dtab-health" onclick="switchDrawerTab('health')" style="flex: 1; padding: 10px 4px; font-size: 11px; font-weight: 600; background: none; border: none; color: #2962ff; border-bottom: 2px solid #2962ff; cursor: pointer; letter-spacing: 0.3px;">⚡ HEALTH</button>
+            <button class="drawer-tab" id="dtab-analytics" onclick="switchDrawerTab('analytics')" style="flex: 1; padding: 10px 4px; font-size: 11px; font-weight: 600; background: none; border: none; color: #787b86; border-bottom: 2px solid transparent; cursor: pointer; letter-spacing: 0.3px;">📈 ANALYTICS</button>
+            <button class="drawer-tab" id="dtab-logs" onclick="switchDrawerTab('logs')" style="flex: 1; padding: 10px 4px; font-size: 11px; font-weight: 600; background: none; border: none; color: #787b86; border-bottom: 2px solid transparent; cursor: pointer; letter-spacing: 0.3px;">📋 LOGS</button>
+            <button class="drawer-tab" id="dtab-notifications" onclick="switchDrawerTab('notifications')" style="flex: 1; padding: 10px 4px; font-size: 11px; font-weight: 600; background: none; border: none; color: #787b86; border-bottom: 2px solid transparent; cursor: pointer; letter-spacing: 0.3px;">🔔 ALERTS</button>
+            <button class="drawer-tab" id="dtab-config" onclick="switchDrawerTab('config')" style="flex: 1; padding: 10px 4px; font-size: 11px; font-weight: 600; background: none; border: none; color: #787b86; border-bottom: 2px solid transparent; cursor: pointer; letter-spacing: 0.3px;">⚙️ CONFIG</button>
+        </div>
+        <!-- Drawer Content -->
+        <div style="flex: 1; overflow-y: auto; padding: 16px;">
+
+            <!-- HEALTH PANEL -->
+            <div id="dpanel-health">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px;">
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 12px;">
+                        <div style="font-size: 10px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 6px;">BROKER</div>
+                        <div id="dp-broker" style="font-size: 13px; font-weight: 700; color: #089981;">● Connected</div>
+                    </div>
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 12px;">
+                        <div style="font-size: 10px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 6px;">WEBSOCKET</div>
+                        <div id="dp-ws" style="font-size: 13px; font-weight: 700; color: #089981;">● Live</div>
+                    </div>
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 12px;">
+                        <div style="font-size: 10px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 6px;">DATABASE</div>
+                        <div id="dp-db" style="font-size: 13px; font-weight: 700; color: #089981;">● Healthy</div>
+                    </div>
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 12px;">
+                        <div style="font-size: 10px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 6px;">CACHE</div>
+                        <div id="dp-cache" style="font-size: 13px; font-weight: 700; color: #089981;">● Healthy</div>
+                    </div>
+                </div>
+                <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 12px; margin-bottom: 10px;">
+                    <div style="font-size: 10px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 10px;">SYSTEM RESOURCES</div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                        <span style="font-size: 12px; color: #adb7c9;">CPU Usage</span>
+                        <strong id="dp-cpu" style="font-size: 12px; color: #d1d4dc;">--</strong>
+                    </div>
+                    <div style="background: #2a2e39; border-radius: 4px; height: 4px; margin-bottom: 12px;"><div id="dp-cpu-bar" style="height: 4px; border-radius: 4px; background: #2962ff; width: 0%;"></div></div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                        <span style="font-size: 12px; color: #adb7c9;">Memory Usage</span>
+                        <strong id="dp-mem" style="font-size: 12px; color: #d1d4dc;">--</strong>
+                    </div>
+                    <div style="background: #2a2e39; border-radius: 4px; height: 4px;"><div id="dp-mem-bar" style="height: 4px; border-radius: 4px; background: #089981; width: 0%;"></div></div>
+                </div>
+                <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 12px;">
+                    <div style="font-size: 10px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 10px;">LATENCY</div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;"><span style="font-size: 12px; color: #adb7c9;">API Latency</span><strong id="dp-api-lat" style="font-size: 12px; color: #d1d4dc;">--</strong></div>
+                    <div style="display: flex; justify-content: space-between;"><span style="font-size: 12px; color: #adb7c9;">Last Market Tick</span><strong id="dp-tick" style="font-size: 12px; color: #d1d4dc;">--</strong></div>
+                </div>
+            </div>
+
+            <!-- ANALYTICS PANEL -->
+            <div id="dpanel-analytics" style="display: none;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px;">
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 10px;">
+                        <div style="font-size: 10px; color: #787b86; letter-spacing: 0.5px; margin-bottom: 4px;">NET PROFIT</div>
+                        <div id="an-net" style="font-size: 16px; font-weight: 700; color: #089981;">₹0.00</div>
+                    </div>
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 10px;">
+                        <div style="font-size: 10px; color: #787b86; letter-spacing: 0.5px; margin-bottom: 4px;">WIN RATE</div>
+                        <div id="an-winrate" style="font-size: 16px; font-weight: 700; color: #d1d4dc;">0.0%</div>
+                    </div>
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 10px;">
+                        <div style="font-size: 10px; color: #787b86; letter-spacing: 0.5px; margin-bottom: 4px;">PROFIT FACTOR</div>
+                        <div id="an-pf" style="font-size: 16px; font-weight: 700; color: #d1d4dc;">—</div>
+                    </div>
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 10px;">
+                        <div style="font-size: 10px; color: #787b86; letter-spacing: 0.5px; margin-bottom: 4px;">MAX DRAWDOWN</div>
+                        <div id="an-dd" style="font-size: 16px; font-weight: 700; color: #f23645;">₹0.00</div>
+                    </div>
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 10px;">
+                        <div style="font-size: 10px; color: #787b86; letter-spacing: 0.5px; margin-bottom: 4px;">AVG PROFIT</div>
+                        <div id="an-avg-profit" style="font-size: 15px; font-weight: 700; color: #089981;">₹0.00</div>
+                    </div>
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 10px;">
+                        <div style="font-size: 10px; color: #787b86; letter-spacing: 0.5px; margin-bottom: 4px;">AVG LOSS</div>
+                        <div id="an-avg-loss" style="font-size: 15px; font-weight: 700; color: #f23645;">₹0.00</div>
+                    </div>
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 10px;">
+                        <div style="font-size: 10px; color: #787b86; letter-spacing: 0.5px; margin-bottom: 4px;">LARGEST WIN</div>
+                        <div id="an-lwin" style="font-size: 15px; font-weight: 700; color: #089981;">₹0.00</div>
+                    </div>
+                    <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 10px;">
+                        <div style="font-size: 10px; color: #787b86; letter-spacing: 0.5px; margin-bottom: 4px;">LARGEST LOSS</div>
+                        <div id="an-lloss" style="font-size: 15px; font-weight: 700; color: #f23645;">₹0.00</div>
+                    </div>
+                </div>
+                <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 12px; margin-bottom: 10px;">
+                    <div style="font-size: 10px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 10px;">STRATEGY FUNNEL</div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;"><span style="font-size: 12px; color: #adb7c9;">Boxes Created</span><strong id="an-boxes" style="font-size: 12px; color: #d1d4dc;">0</strong></div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;"><span style="font-size: 12px; color: #adb7c9;">Signals Generated</span><strong id="an-signals" style="font-size: 12px; color: #d1d4dc;">0</strong></div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;"><span style="font-size: 12px; color: #adb7c9;">Confirmation Rate</span><strong id="an-conf-rate" style="font-size: 12px; color: #d1d4dc;">0%</strong></div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;"><span style="font-size: 12px; color: #adb7c9;">Target Hit %</span><strong id="an-tgt-pct" style="font-size: 12px; color: #089981;">0%</strong></div>
+                    <div style="display: flex; justify-content: space-between;"><span style="font-size: 12px; color: #adb7c9;">Stop Loss %</span><strong id="an-sl-pct" style="font-size: 12px; color: #f23645;">0%</strong></div>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <a href="/api/reports/daily?export=csv" style="flex: 1; text-align: center; background: #2a2e39; color: #d1d4dc; padding: 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-decoration: none;">📥 Daily CSV</a>
+                    <a href="/api/reports/weekly?export=csv" style="flex: 1; text-align: center; background: #2a2e39; color: #d1d4dc; padding: 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-decoration: none;">📥 Weekly CSV</a>
+                    <a href="/api/reports/monthly?export=csv" style="flex: 1; text-align: center; background: #2a2e39; color: #d1d4dc; padding: 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-decoration: none;">📥 Monthly CSV</a>
+                </div>
+            </div>
+
+            <!-- LOGS PANEL -->
+            <div id="dpanel-logs" style="display: none;">
+                <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                    <input id="log-search" type="text" placeholder="Search logs..." style="flex: 1; background: #131722; border: 1px solid #2a2e39; color: #d1d4dc; border-radius: 6px; padding: 7px 10px; font-size: 12px;" oninput="refreshLogs()">
+                    <select id="log-severity" style="background: #131722; border: 1px solid #2a2e39; color: #d1d4dc; border-radius: 6px; padding: 7px 8px; font-size: 12px;" onchange="refreshLogs()">
+                        <option value="">All Severity</option>
+                        <option value="INFO">INFO</option>
+                        <option value="WARNING">WARNING</option>
+                        <option value="CRITICAL">CRITICAL</option>
+                    </select>
+                </div>
+                <div id="logs-list" style="display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 260px); overflow-y: auto;">
+                    <div style="color: #787b86; font-size: 12px; text-align: center; padding: 20px;">No events logged yet.</div>
+                </div>
+            </div>
+
+            <!-- NOTIFICATIONS PANEL -->
+            <div id="dpanel-notifications" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <span style="font-size: 12px; color: #787b86;">Recent Alerts</span>
+                    <button onclick="clearNotifications()" style="background: #2a2e39; border: none; color: #787b86; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;">Clear All</button>
+                </div>
+                <div id="notifications-list" style="display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 240px); overflow-y: auto;">
+                    <div style="color: #787b86; font-size: 12px; text-align: center; padding: 20px;">No alerts yet.</div>
+                </div>
+            </div>
+
+            <!-- CONFIG PANEL -->
+            <div id="dpanel-config" style="display: none;">
+                <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 14px; margin-bottom: 12px;">
+                    <div style="font-size: 11px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 12px;">STRATEGY</div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <span style="font-size: 12px; color: #adb7c9;">Strategy Enabled</span>
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" id="cfg-strategy-enabled" checked style="width: 16px; height: 16px; cursor: pointer;">
+                            <span style="font-size: 12px; color: #d1d4dc;">Active</span>
+                        </label>
+                    </div>
+                </div>
+                <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 14px; margin-bottom: 12px;">
+                    <div style="font-size: 11px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 12px;">EXECUTION</div>
+                    <div style="margin-bottom: 10px;">
+                        <label style="font-size: 12px; color: #adb7c9; display: block; margin-bottom: 4px;">Sizing Type</label>
+                        <select id="cfg-sizing-type" style="width: 100%; background: #2a2e39; border: 1px solid #3a3f4f; color: #d1d4dc; border-radius: 6px; padding: 7px;">
+                            <option value="FIXED">Fixed Quantity</option>
+                            <option value="CAPITAL">Capital Based</option>
+                        </select>
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <label style="font-size: 12px; color: #adb7c9; display: block; margin-bottom: 4px;">Fixed Quantity</label>
+                        <input id="cfg-fixed-qty" type="number" min="1" value="10" style="width: 100%; background: #2a2e39; border: 1px solid #3a3f4f; color: #d1d4dc; border-radius: 6px; padding: 7px; box-sizing: border-box;">
+                    </div>
+                </div>
+                <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 14px; margin-bottom: 12px;">
+                    <div style="font-size: 11px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 12px;">RISK MANAGEMENT</div>
+                    <div style="margin-bottom: 10px;">
+                        <label style="font-size: 12px; color: #adb7c9; display: block; margin-bottom: 4px;">Confirmation Window (seconds)</label>
+                        <input id="cfg-conf-timeout" type="number" min="5" value="30" style="width: 100%; background: #2a2e39; border: 1px solid #3a3f4f; color: #d1d4dc; border-radius: 6px; padding: 7px; box-sizing: border-box;">
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <label style="font-size: 12px; color: #adb7c9; display: block; margin-bottom: 4px;">Stop Loss Offset (points)</label>
+                        <input id="cfg-sl-offset" type="number" min="0" step="0.5" value="5.0" style="width: 100%; background: #2a2e39; border: 1px solid #3a3f4f; color: #d1d4dc; border-radius: 6px; padding: 7px; box-sizing: border-box;">
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <label style="font-size: 12px; color: #adb7c9; display: block; margin-bottom: 4px;">Target Level</label>
+                        <select id="cfg-target-level" style="width: 100%; background: #2a2e39; border: 1px solid #3a3f4f; color: #d1d4dc; border-radius: 6px; padding: 7px;">
+                            <option value="1.14">1.14 Extension</option>
+                            <option value="1.39" selected>1.39 Extension</option>
+                            <option value="1.618">1.618 (Golden)</option>
+                            <option value="2.0">2.0 Extension</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 14px; margin-bottom: 12px;">
+                    <div style="font-size: 11px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 12px;">NOTIFICATIONS</div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <span style="font-size: 12px; color: #adb7c9;">Sound Alerts</span>
+                        <input type="checkbox" id="cfg-sound" checked style="width: 16px; height: 16px; cursor: pointer;">
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 12px; color: #adb7c9;">Browser Notifications</span>
+                        <input type="checkbox" id="cfg-browser-notif" checked style="width: 16px; height: 16px; cursor: pointer;">
+                    </div>
+                </div>
+                <button onclick="saveConfig()" style="width: 100%; background: #2962ff; color: white; border: none; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer;">💾 Save Configuration</button>
+                <div id="cfg-save-msg" style="text-align: center; font-size: 12px; color: #089981; margin-top: 8px; display: none;">✅ Configuration saved!</div>
+            </div>
+
+        </div>
+    </div>
+    <!-- Drawer overlay -->
+    <div id="drawer-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 4999;" onclick="closeMonitorDrawer()"></div>
+
+    <!-- Use a cache-busting query parameter for main.js to force browser to reload it -->
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=2.17"></script>
+    <style>
+        .toast {
+            min-width: 250px;
+            background: #1e222d;
+            color: white;
+            padding: 16px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            opacity: 0;
+            transform: translateX(100%);
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            border-left: 4px solid #2962ff;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateX(0);
+        }
+        .toast.buy { border-left-color: #089981; }
+        .toast.sell { border-left-color: #f23645; }
+        #monitor-drawer.open { right: 0 !important; }
+    </style>
+</body>
+</html>
