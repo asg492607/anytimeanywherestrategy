@@ -8,7 +8,7 @@ logger = logging.getLogger('stop_loss_engine')
 
 STOP_LOSS_CONFIG = {
     'enabled': True,
-    'points_offset': 5.0,     # Reference Box Lower Boundary - 5 Points
+    'points_offset': 3.0,     # Exit 3 points below the Reference Box
     'max_retries': 3,
     'retry_delay_seconds': 2
 }
@@ -86,9 +86,9 @@ def monitor_running_trades(user_id, candles_dict):
         if latest_candle['time'] <= entry_ts:
             continue
 
-        if latest_candle['close'] < box['lower_boundary']:
+        if latest_candle['low'] <= calculated_sl:
             # STOP LOSS TRIGGERED!
-            logger.info(f"Stop Loss Triggered: Candle close {latest_candle['close']} below box lower boundary {box['lower_boundary']} for Trade ID {trade_id}")
+            logger.info(f"Stop Loss Triggered: Candle low {latest_candle['low']} hit {calculated_sl} (3 points below box {box['lower_boundary']}) for Trade ID {trade_id}")
             
             # Save trigger candle parameters
             db.save_stop_loss_event(
@@ -110,7 +110,7 @@ def monitor_running_trades(user_id, candles_dict):
                 pnl=None,
                 broker_exit_order_id=None,
                 exit_status='TRIGGERED',
-                exit_reason='Candle closed below lower boundary'
+                exit_reason='Candle touched 3 points below lower boundary'
             )
             
             # Execute Exit order

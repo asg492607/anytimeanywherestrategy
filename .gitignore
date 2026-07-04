@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-tokens_cache.json
-.env
-.venv/
-venv/
-env/
-.idea/
-.vscode/

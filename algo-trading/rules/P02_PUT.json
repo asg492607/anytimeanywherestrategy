@@ -1,0 +1,23 @@
+{
+    "id": "P02_PUT",
+    "name": "SENSEX + CE = RULE NO. (P02) for PUT OPTION",
+    "type": "BUY_PE",
+    "priority": 1,
+    "match": "ANY_2",
+    "cooldown": 60,
+    "allow_reentry": false,
+    "conditions": [
+        {
+            "chart": "SENSEX",
+            "condition": "high_break_and_close_above"
+        },
+        {
+            "chart": "CE",
+            "condition": "low_break_and_close_below"
+        },
+        {
+            "chart": "PE",
+            "condition": "high_break_and_close_above"
+        }
+    ]
+}
