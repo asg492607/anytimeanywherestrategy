@@ -210,6 +210,79 @@ def calculate_order_quantity(breakout_price):
         return max(10, qty)
     return 10
 
+def execute_rule_signal(user_id, rule_id, action, symbol, price):
+    """
+    Directly executes a trade based on a confirmed Rule Engine signal.
+    Bypasses the old multi-step confirmation state machine.
+    """
+    if not EXECUTION_CONFIG['enabled']:
+        return
+
+    logger.info(f"Executing Rule Signal: Rule {rule_id} triggered {action} for {symbol} at {price}")
+    
+    # 1. Lookup instrument token
+    token, exchange = find_token_by_symbol(symbol)
+    if not token:
+        logger.error(f"Token lookup failed for symbol {symbol}")
+        return
+
+    # 2. Sizing
+    quantity = calculate_order_quantity(price)
+    internal_order_id = f"INT_{uuid.uuid4().hex[:12].upper()}"
+    
+    params = {
+        'exchange': exchange or 'BFO',
+        'symbol': symbol,
+        'token': token,
+        'order_type': 'MARKET',
+        'transaction_type': 'BUY',
+        'product_type': 'CARRYFORWARD',
+        'variety': 'NORMAL',
+        'quantity': quantity,
+        'requested_price': price,
+        'internal_order_id': internal_order_id,
+        'order_tag': rule_id  # Attach the Rule ID for broker traceability!
+    }
+
+    # 3. Double check for active opposite trades
+    running_trades = db.get_running_trades(user_id)
+    new_trade_type = 'CE' if "CE" in symbol else 'PE'
+    for trade in running_trades:
+        if new_trade_type == 'CE' and trade.get('put_symbol'):
+            logger.warning(f"Execution Rejected: Opposite trade (PE) already running")
+            return
+        if new_trade_type == 'PE' and trade.get('call_symbol'):
+            logger.warning(f"Execution Rejected: Opposite trade (CE) already running")
+            return
+
+    # 4. Submit Order
+    logger.info(f"Submitting Order for Rule {rule_id}: {quantity} lots of {symbol}")
+    res = execute_order(params)
+    
+    if res['status']:
+        broker_order_id = res['broker_order_id']
+        is_filled, fill_price, reason = verify_order_status(broker_order_id, params['requested_price'])
+        
+        if is_filled is True:
+            # Create trade directly
+            stop_loss = fill_price - 10.0
+            target = fill_price + 20.0
+            trade_id = db.create_trade(
+                user_id=user_id,
+                broker='angelone',
+                underlying='SENSEX',
+                expiry=None,
+                call_symbol=symbol if "CE" in symbol else None,
+                put_symbol=symbol if "PE" in symbol else None,
+                entry_price=fill_price,
+                quantity=quantity,
+                stop_loss=stop_loss,
+                target=target,
+                strategy_name=rule_id, # Display rule ID in DB!
+                direction='BUY'
+            )
+            logger.info(f"Trade Created: ID {trade_id} (RUNNING) triggered by {rule_id}")
+            
 def execute_order(params):
     """
     Submits order to Angel One OpenAPI. Falls back to simulated fill in offline mode.
@@ -219,7 +292,7 @@ def execute_order(params):
         # Verify if SmartAPI object is initialized and has a valid session token
         if smartApi and smartApi.sessionToken:
             # Place order on OpenAPI
-            resp = smartApi.placeOrder({
+            req_params = {
                 "variety": params['variety'],
                 "tradingsymbol": params['symbol'],
                 "symboltoken": params['token'],
@@ -228,7 +301,11 @@ def execute_order(params):
                 "ordertype": params['order_type'],
                 "producttype": params['product_type'],
                 "quantity": params['quantity']
-            })
+            }
+            if 'order_tag' in params:
+                req_params['ordertag'] = params['order_tag'] # Support for order tagging
+
+            resp = smartApi.placeOrder(req_params)
             if resp and resp.get('status') and resp.get('data'):
                 return {
                     'status': True,

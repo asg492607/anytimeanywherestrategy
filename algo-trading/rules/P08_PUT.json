@@ -1,0 +1,23 @@
+{
+    "id": "P08_PUT",
+    "name": "SENSEX TOUCH LINE + PE= RULE NO (P08) for PUT OPTION",
+    "type": "BUY_PE",
+    "priority": 4,
+    "match": "ANY_2",
+    "cooldown": 60,
+    "allow_reentry": false,
+    "conditions": [
+        {
+            "chart": "PE",
+            "condition": "high_break_and_close_above"
+        },
+        {
+            "chart": "SENSEX",
+            "condition": "low_break_and_close_below"
+        },
+        {
+            "chart": "CE",
+            "condition": "low_break_and_close_below"
+        }
+    ]
+}

@@ -9,147 +9,104 @@ SIGNAL_CONFIG = {
     'expiry_seconds': 3600  # Default: 1 hour expiration for signals
 }
 
+# DEAD CODE REMOVED
+# The legacy breakout and confirmation states are no longer used.
+# The new stateless Rule Engine automatically evaluates and triggers executions instantly.
+
 def detect_breakout(candle, box):
-    """
-    Checks if a candle is a valid body breakout above the reference box upper boundary.
-    Wick-only breakouts (high above, but close below/equal) are not buy signals.
-    """
-    upper_boundary = box['upper_boundary']
-    
-    # Body breakout: close > upper_boundary, and body must cross (open <= upper_boundary)
-    is_breakout = (candle['close'] > upper_boundary) and (candle['open'] <= upper_boundary)
-    return is_breakout
+    pass
 
 def detect_rejection(candle, box):
-    """
-    Checks if a candle touches either the upper or lower boundary,
-    but gets rejected and reverses without closing beyond the boundary.
-    """
-    upper_boundary = box['upper_boundary']
-    lower_boundary = box['lower_boundary']
-    
-    # Upper boundary rejection
-    is_upper_touch = (candle['high'] >= upper_boundary)
-    is_upper_close_inside = (candle['close'] <= upper_boundary)
-    upper_rejection = is_upper_touch and is_upper_close_inside
-    
-    # Lower boundary rejection
-    is_lower_touch = (candle['low'] <= lower_boundary)
-    is_lower_close_inside = (candle['close'] >= lower_boundary)
-    lower_rejection = is_lower_touch and is_lower_close_inside
-    
-    return upper_rejection or lower_rejection
+    pass
 
 def create_buy_signal(user_id, box, candle):
-    """
-    Creates or updates a Buy Signal with WAITING status (awaiting multi-chart confirmation).
-    """
-    # Check if a signal already exists for this box
-    existing = db.get_buy_signal_by_box(user_id, box['id'])
-    
-    rejection_cnt = existing['rejection_count'] if existing else 0
-    
-    # Check if we already have an active/waiting signal to prevent duplicates
-    if existing and existing['signal_status'] in ['WAITING', 'CONFIRMED']:
-        logger.info(f"Duplicate Buy Signal Prevented: Box {box['id']} already has active signal ID {existing['id']}")
-        return existing['id']
-
-    # Insert or update to WAITING status
-    sig_id = db.save_buy_signal(
-        user_id=user_id,
-        reference_box_id=box['id'],
-        chart_type=box['chart_type'],
-        instrument_symbol=box['instrument_symbol'],
-        signal_status='WAITING',
-        trigger_candle_timestamp=int(candle['time']),
-        trigger_open=float(candle['open']),
-        trigger_high=float(candle['high']),
-        trigger_low=float(candle['low']),
-        trigger_close=float(candle['close']),
-        breakout_price=float(candle['close']),
-        breakout_boundary=float(box['upper_boundary']),
-        rejection_count=rejection_cnt
-    )
-    
-    logger.info(f"Buy Signal Created: ID {sig_id} (WAITING) on {box['chart_type']} level {box['fib_level']} @ breakout price {candle['close']}")
-    return sig_id
+    pass
 
 def reject_breakout(user_id, box, candle):
-    """
-    Handles a breakout rejection. Increments rejection count, keeps box active.
-    """
-    existing = db.get_buy_signal_by_box(user_id, box['id'])
-    
-    # Ignore if already confirmed or waiting breakout
-    if existing and existing['signal_status'] in ['WAITING', 'CONFIRMED']:
-        return existing['id']
-        
-    new_rejections = (existing['rejection_count'] + 1) if existing else 1
-    
-    sig_id = db.save_buy_signal(
-        user_id=user_id,
-        reference_box_id=box['id'],
-        chart_type=box['chart_type'],
-        instrument_symbol=box['instrument_symbol'],
-        signal_status='REJECTED',
-        trigger_candle_timestamp=int(candle['time']),
-        trigger_open=float(candle['open']),
-        trigger_high=float(candle['high']),
-        trigger_low=float(candle['low']),
-        trigger_close=float(candle['close']),
-        rejection_count=new_rejections
-    )
-    
-    logger.info(f"Breakout Rejected: Box {box['id']} on {box['chart_type']} touched boundary {box['upper_boundary']} (High: {candle['high']}) but closed inside {candle['close']}. Total Rejections: {new_rejections}")
-    return sig_id
+    pass
 
 def check_and_expire_signals(user_id):
-    """Marks WAITING signals older than expiry_seconds as EXPIRED."""
-    active = db.get_active_signals(user_id)
-    now_ts = int(time.time())
-    expiry_limit = SIGNAL_CONFIG['expiry_seconds']
-    
-    for sig in active:
-        # Check signal age based on trigger_candle_timestamp or created_at
-        # We will check based on trigger_candle_timestamp
-        if sig['trigger_candle_timestamp']:
-            age = now_ts - sig['trigger_candle_timestamp']
-            if age > expiry_limit and sig['signal_status'] == 'WAITING':
-                db.update_signal_status(user_id, sig['id'], 'EXPIRED')
-                logger.info(f"Signal Expired: ID {sig['id']} timed out without confirmation")
+    pass
+
+from strategy.feature_extractor import extract_facts
+from strategy.rule_engine import get_engine
+from strategy.execution_engine import execute_rule_signal
 
 def monitor_reference_boxes(user_id, candles_dict):
     """
-    Processes all ACTIVE reference boxes and matches them against latest candles
-    to detect breakouts or boundary rejections.
+    Processes the latest candles for SENSEX, PE, and CE.
+    Converts them into facts and feeds them to the stateless Rule Engine.
     """
     if not SIGNAL_CONFIG['enabled']:
         return
 
-    # Fetch active boxes
+    # Fetch active boxes (this tells us the Fib lines and Reference Highs/Lows)
     active_boxes = db.get_active_boxes(user_id)
     
-    for box in active_boxes:
-        chart_key = box['chart_type'] # SPOT, CALL, PUT
-        candles = candles_dict.get(chart_key, [])
+    # Map boxes by chart type for quick access
+    boxes_by_chart = {box['chart_type']: box for box in active_boxes}
+    
+    # We will evaluate the rule engine on the absolute latest candle
+    # In a live system, this runs every tick/second.
+    facts_by_chart = {}
+    
+    for chart_type in ['SENSEX', 'PE', 'CE']:
+        candles = candles_dict.get(chart_type, [])
         if not candles:
             continue
             
-        # Filter candles newer than the reference box creation candle
-        newer_candles = [c for c in candles if int(c['time']) > box['candle_timestamp']]
+        latest_candle = sorted(candles, key=lambda x: x['time'])[-1]
+        box = boxes_by_chart.get(chart_type)
         
-        # Sort chronologically
-        newer_candles_sorted = sorted(newer_candles, key=lambda x: x['time'])
+        # Reconstruct the reference candle from DB fields for High/Low break logic
+        ref_candle = None
+        if box:
+            ref_candle = {
+                'high': box['candle_high'],
+                'low': box['candle_low']
+            }
+            
+        # Extract facts (e.g. fib_cross, high_break)
+        facts = extract_facts(latest_candle, box, ref_candle)
+        facts_by_chart[chart_type] = facts
+
+    # If we have no boxes at all, there's nothing to evaluate
+    if not boxes_by_chart:
+        return
+
+    # Feed all facts into the rule engine
+    engine = get_engine()
+    signals = engine.evaluate_all(facts_by_chart)
+    
+    # Pass raw signals through the Decision Engine
+    from strategy.decision_engine import get_decision_engine
+    decision_engine = get_decision_engine()
+    approved_signals = decision_engine.evaluate_decisions(user_id, signals)
+    
+    # Execute any approved signals
+    for signal in approved_signals:
+        rule_id = signal['rule_id']
+        action = signal['action']
         
-        for candle in newer_candles_sorted:
-            # First check for body breakout
-            if detect_breakout(candle, box):
-                create_buy_signal(user_id, box, candle)
-                break  # Stop processing newer candles for this box since breakout triggered
-                
-            # Then check for boundary rejection
-            elif detect_rejection(candle, box):
-                reject_breakout(user_id, box, candle)
+        # Determine which symbol to buy and the current price
+        target_chart = 'CE' if action == 'BUY_CE' else 'PE'
+        
+        # We need the symbol string (e.g. SENSEX24JUL80000CE) to execute
+        target_box = boxes_by_chart.get(target_chart)
+        if not target_box:
+            logger.error(f"Rule {rule_id} triggered {action}, but no active {target_chart} box exists to find the symbol.")
+            continue
+            
+        symbol = target_box['instrument_symbol']
+        
+        # Get the latest price for the target option
+        target_candles = candles_dict.get(target_chart, [])
+        if not target_candles:
+            continue
+        price = target_candles[-1]['close']
+        
+        # Fire to Execution Engine (Bypasses old DB waiting states!)
+        execute_rule_signal(user_id, rule_id, action, symbol, price)
 
 # ─── Strategy Required Wrappers ───
 

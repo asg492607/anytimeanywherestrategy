@@ -31,7 +31,7 @@ TARGET_LEVEL_KEYS = {
 }
 
 def monitor_running_trades(user_id, candles_dict, db_data=None):
-    """Monitors all RUNNING trades for target hit events on CALL, SPOT, or PUT charts."""
+    """Monitors all RUNNING trades for target hit events on CE, SENSEX, or PE charts."""
     if not TARGET_CONFIG['enabled']:
         return
 
@@ -39,48 +39,32 @@ def monitor_running_trades(user_id, candles_dict, db_data=None):
     if not running_trades:
         return
 
+    # Cache active boxes to evaluate each chart's dynamic levels
+    active_boxes = db.get_active_boxes(user_id)
+    boxes_by_chart = {b['chart_type']: b for b in active_boxes}
+
     for trade in running_trades:
         trade_id = trade['id']
         
-        # 1. Fetch Reference Box for trade
-        box = db.get_reference_box_for_trade(user_id, trade_id)
-        if not box:
-            logger.warning(f"Target Exit Monitor: Reference Box not found for Trade ID {trade_id}")
-            continue
-
         exec_record = db.get_execution_for_trade(user_id, trade_id)
         exec_id = exec_record['id'] if exec_record else None
         confirmation_id = exec_record['confirmation_id'] if exec_record else None
 
-        # 2. Get active target level event
-        target_level = TARGET_CONFIG['default_target_level']
         target_event = db.get_target_exit_by_trade_id(user_id, trade_id)
 
-        # Resolve levels for the trade's setup chart to define target price
-        levels_box_chart = get_levels_for_chart(box['chart_type'], db_data)
-        if not levels_box_chart:
-            logger.warning(f"Target Exit Monitor: Could not resolve levels for box chart {box['chart_type']}")
-            continue
-
-        tgt_key = TARGET_LEVEL_KEYS[box['fib_direction']][target_level]
-        target_price = levels_box_chart.get(tgt_key)
-        if not target_price:
-            logger.warning(f"Target Exit Monitor: Level key {tgt_key} not resolved in levels")
-            continue
-
         if not target_event:
-            # Create a target event in MONITORING state
+            # Initialize target event with placeholder values for ANY level monitoring
             event_id = db.save_target_exit_event(
                 user_id=user_id,
                 trade_id=trade_id,
                 execution_id=exec_id,
                 confirmation_id=confirmation_id,
-                reference_box_id=box['id'],
-                chart_type=box['chart_type'],
-                instrument_symbol=box['instrument_symbol'],
-                fib_direction=box['fib_direction'],
-                target_level=target_level,
-                target_price=target_price,
+                reference_box_id=None,
+                chart_type='ANY',
+                instrument_symbol=trade['call_symbol'] or trade['put_symbol'],
+                fib_direction='ANY',
+                target_level='ANY',
+                target_price=0.0,
                 trigger_candle_timestamp=None,
                 trigger_open=None,
                 trigger_high=None,
@@ -99,9 +83,14 @@ def monitor_running_trades(user_id, candles_dict, db_data=None):
         if target_event['exit_status'] not in ['MONITORING', 'FAILED', 'REJECTED']:
             continue
 
-        # 3. Check target crosses on ALL THREE charts (CALL, SPOT, PUT)
-        for check_chart in ['CALL', 'SPOT', 'PUT']:
-            candles = candles_dict.get(check_chart, [])
+        # Check target crosses on ALL THREE charts
+        target_hit_detected = False
+        
+        for check_chart in ['SENSEX', 'CE', 'PE']:
+            # The original target_engine used CALL/SPOT/PUT for keys
+            mapped_chart = 'CALL' if check_chart == 'CE' else 'PUT' if check_chart == 'PE' else 'SPOT'
+            
+            candles = candles_dict.get(check_chart, candles_dict.get(mapped_chart, []))
             if not candles:
                 continue
 
@@ -110,46 +99,56 @@ def monitor_running_trades(user_id, candles_dict, db_data=None):
             if latest_candle['time'] <= entry_ts:
                 continue
 
-            # Resolve levels for this chart
-            chart_levels = get_levels_for_chart(check_chart, db_data)
+            box = boxes_by_chart.get(check_chart)
+            if not box:
+                continue
+                
+            # Resolve levels for this specific chart
+            chart_levels = get_levels_for_chart(mapped_chart, db_data)
             if not chart_levels:
                 continue
 
-            # Calculate target price for this specific chart
-            chart_tgt_price = chart_levels.get(tgt_key)
-            if not chart_tgt_price:
-                continue
+            # Check ALL 4 target levels
+            for level_name in ['1.14', '1.39', '1.618', '2.0']:
+                tgt_key = TARGET_LEVEL_KEYS[box['fib_direction']][level_name]
+                chart_tgt_price = chart_levels.get(tgt_key)
+                if not chart_tgt_price:
+                    continue
 
-            # Evaluate breakout touch
-            is_hit = detect_target_hit(latest_candle, chart_tgt_price, box['fib_direction'])
-            if is_hit:
-                logger.info(f"Target Hit Triggered on chart {check_chart} (price={latest_candle['close']} vs target={chart_tgt_price})")
-                
-                db.save_target_exit_event(
-                    user_id=user_id,
-                    trade_id=trade_id,
-                    execution_id=exec_id,
-                    confirmation_id=confirmation_id,
-                    reference_box_id=box['id'],
-                    chart_type=check_chart,
-                    instrument_symbol=trade['call_symbol'] or trade['put_symbol'],
-                    fib_direction=box['fib_direction'],
-                    target_level=target_level,
-                    target_price=target_price,  # Save target price of original option setup chart
-                    trigger_candle_timestamp=latest_candle['time'],
-                    trigger_open=latest_candle['open'],
-                    trigger_high=latest_candle['high'],
-                    trigger_low=latest_candle['low'],
-                    trigger_close=latest_candle['close'],
-                    exit_price=None,
-                    pnl=None,
-                    broker_exit_order_id=None,
-                    exit_status='TARGET_DETECTED',
-                    exit_reason=f"Target level {target_level} crossed on {check_chart} chart"
-                )
-                
-                execute_target_exit(user_id, trade, target_event['id'], target_price, latest_candle, check_chart)
-                break  # Exit loop after first chart hits
+                is_hit = detect_target_hit(latest_candle, chart_tgt_price, box['fib_direction'])
+                if is_hit:
+                    logger.info(f"Target {level_name} Hit Triggered on chart {check_chart} (price={latest_candle['close']} vs target={chart_tgt_price})")
+                    
+                    db.save_target_exit_event(
+                        user_id=user_id,
+                        trade_id=trade_id,
+                        execution_id=exec_id,
+                        confirmation_id=confirmation_id,
+                        reference_box_id=box['id'],
+                        chart_type=check_chart,
+                        instrument_symbol=trade['call_symbol'] or trade['put_symbol'],
+                        fib_direction=box['fib_direction'],
+                        target_level=level_name,
+                        target_price=chart_tgt_price, 
+                        trigger_candle_timestamp=latest_candle['time'],
+                        trigger_open=latest_candle['open'],
+                        trigger_high=latest_candle['high'],
+                        trigger_low=latest_candle['low'],
+                        trigger_close=latest_candle['close'],
+                        exit_price=None,
+                        pnl=None,
+                        broker_exit_order_id=None,
+                        exit_status='TARGET_DETECTED',
+                        exit_reason=f"Target level {level_name} crossed on {check_chart} chart"
+                    )
+                    
+                    target_event = db.get_target_exit_by_trade_id(user_id, trade_id) # Reload for updated ID/price
+                    execute_target_exit(user_id, trade, target_event['id'], chart_tgt_price, latest_candle, check_chart)
+                    target_hit_detected = True
+                    break
+            
+            if target_hit_detected:
+                break
 
 def detect_target_hit(candle, target_price, fib_direction):
     """Checks if candle high/low boundary touched or crossed the target price."""

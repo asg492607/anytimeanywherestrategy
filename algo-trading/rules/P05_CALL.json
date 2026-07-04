@@ -1,0 +1,23 @@
+{
+    "id": "P05_CALL",
+    "name": "SENSEX + PE Line Touch= RULE NO (P05) for CALL OPTION",
+    "type": "BUY_CE",
+    "priority": 3,
+    "match": "ANY_2",
+    "cooldown": 60,
+    "allow_reentry": false,
+    "conditions": [
+        {
+            "chart": "SENSEX",
+            "condition": "high_break_and_close_above"
+        },
+        {
+            "chart": "PE",
+            "condition": "low_break_and_close_below"
+        },
+        {
+            "chart": "CE",
+            "condition": "high_break_and_close_above"
+        }
+    ]
+}
