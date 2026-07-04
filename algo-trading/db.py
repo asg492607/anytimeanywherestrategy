@@ -1366,16 +1366,24 @@ def get_completed_stop_loss_events(user_id):
         conn.close()
 
 def get_reference_box_for_trade(user_id, trade_id):
-    """Relational query mapping trade to its trigger Reference Box details."""
+    """Maps trade to its trigger Reference Box based on traded symbol."""
     conn = get_db_connection()
     try:
+        trade_row = conn.execute("SELECT * FROM trades WHERE id = ? AND user_id = ?", (trade_id, user_id)).fetchone()
+        if not trade_row:
+            return None
+        trade = dict(trade_row)
+        
+        symbol = trade['call_symbol'] or trade['put_symbol']
+        if not symbol:
+            return None
+            
         row = conn.execute("""
-            SELECT rb.* FROM reference_boxes rb
-            JOIN buy_signals bs ON rb.id = bs.reference_box_id
-            JOIN trade_confirmation_signals tcs ON bs.id = tcs.buy_signal_id
-            JOIN trade_executions te ON tcs.confirmation_id = te.confirmation_id
-            WHERE te.trade_id = ? AND te.user_id = ?
-        """, (trade_id, user_id)).fetchone()
+            SELECT * FROM reference_boxes 
+            WHERE user_id = ? AND instrument_symbol = ? 
+            ORDER BY candle_timestamp DESC LIMIT 1
+        """, (user_id, symbol)).fetchone()
+        
         return dict(row) if row else None
     finally:
         conn.close()

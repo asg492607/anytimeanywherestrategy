@@ -1,0 +1,19 @@
+{
+    "id": "P04_PUT",
+    "name": "PE + CE = RULE NO- (P04) for PUT OPTION",
+    "type": "BUY_PE",
+    "priority": 2,
+    "match": "ALL",
+    "cooldown": 60,
+    "allow_reentry": false,
+    "conditions": [
+        {
+            "chart": "PE",
+            "condition": "high_break_and_close_above"
+        },
+        {
+            "chart": "CE",
+            "condition": "low_break_and_close_below"
+        }
+    ]
+}
