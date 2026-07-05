@@ -9,15 +9,15 @@
     "conditions": [
         {
             "chart": "CE",
-            "condition": "high_break_and_close_above"
+            "state": "BULLISH"
         },
         {
             "chart": "SENSEX",
-            "condition": "high_break_and_close_above"
+            "state": "BULLISH"
         },
         {
             "chart": "PE",
-            "condition": "low_break_and_close_below"
+            "state": "BEARISH"
         }
     ]
 }

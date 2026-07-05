@@ -9,11 +9,11 @@
     "conditions": [
         {
             "chart": "PE",
-            "condition": "high_break_and_close_above"
+            "state": "BULLISH"
         },
         {
             "chart": "CE",
-            "condition": "low_break_and_close_below"
+            "state": "BEARISH"
         }
     ]
 }

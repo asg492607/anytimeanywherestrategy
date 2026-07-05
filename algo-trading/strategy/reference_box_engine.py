@@ -32,19 +32,18 @@ LEVEL_KEYS = {
     }
 }
 
-def detect_fibonacci_cross(candle, levels):
+from strategy.feature_extractor import extract_signals
+
+def detect_fibonacci_events(candle, levels):
     """
     Evaluates a candle against monitored Fibonacci levels.
-    A cross occurs when the candle body (open -> close) spans/crosses a level.
-    Returns a list of detected crosses.
+    Returns a list of detected events that warrant a Reference Box (S1, S7, S8).
     """
-    crosses = []
+    events = []
     if not levels:
-        return crosses
+        return events
 
-    body_min = min(candle['open'], candle['close'])
-    body_max = max(candle['open'], candle['close'])
-    crossed_direction = 'UPWARD' if candle['close'] >= candle['open'] else 'DOWNWARD'
+    crossed_direction = 'UPWARD' if float(candle['close']) >= float(candle['open']) else 'DOWNWARD'
 
     for direction in ['LOW_TO_HIGH', 'HIGH_TO_LOW']:
         for lvl_name in MONITORED_LEVELS:
@@ -52,16 +51,18 @@ def detect_fibonacci_cross(candle, levels):
             lvl_price = levels.get(lvl_key)
             if lvl_price is None:
                 continue
-
-            # Verify if level price lies inside the candle body
-            if body_min <= lvl_price <= body_max:
-                crosses.append({
+                
+            signals = extract_signals(candle, fib_level=lvl_price)
+            
+            if signals['S1_FIB_CROSS'] or signals['S7_GREEN_SUSTAIN'] or signals['S8_RED_REJECTION']:
+                events.append({
                     'level_name': lvl_name,
                     'price': float(lvl_price),
                     'fib_direction': direction,
-                    'crossed_direction': crossed_direction
+                    'crossed_direction': crossed_direction,
+                    'signals': signals
                 })
-    return crosses
+    return events
 
 def create_reference_box(user_id, chart_type, instrument_symbol, timeframe, fib_direction, fib_level, 
                          candle, crossed_direction):
@@ -146,17 +147,17 @@ def process_latest_candles(user_id, chart_type, symbol, timeframe, candles, leve
     # Check the last 3 candles to capture fresh crossings reliably
     check_candles = candles[-3:]
     for c in check_candles:
-        crosses = detect_fibonacci_cross(c, levels)
-        for cross in crosses:
+        events = detect_fibonacci_events(c, levels)
+        for event in events:
             create_reference_box(
                 user_id=user_id,
                 chart_type=chart_type,
                 instrument_symbol=symbol,
                 timeframe=timeframe,
-                fib_direction=cross['fib_direction'],
-                fib_level=cross['level_name'],
+                fib_direction=event['fib_direction'],
+                fib_level=event['level_name'],
                 candle=c,
-                crossed_direction=cross['crossed_direction']
+                crossed_direction=event['crossed_direction']
             )
 
 # ─── Strategy Required Functions Wrappers ───

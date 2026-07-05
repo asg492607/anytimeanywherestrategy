@@ -34,21 +34,30 @@ class RuleEngine:
 
     def evaluate_rule(self, rule, facts_by_chart):
         """
-        Evaluates a single rule against the provided facts.
+        Evaluates a single rule against the raw facts for each chart.
         """
         matched_conditions = 0
         failed_reasons = []
         
         for condition in rule.get('conditions', []):
             chart = condition.get('chart')
-            req_cond = condition.get('condition')
+            req_state = condition.get('state') or condition.get('condition')
             
             chart_facts = facts_by_chart.get(chart, {})
             
-            if chart_facts.get(req_cond, False):
+            # Map the JSON rule state to the specific confirmation flag
+            actual_state = False
+            if req_state == 'BULLISH':
+                actual_state = chart_facts.get('bullish_state', False)
+            elif req_state == 'BEARISH':
+                actual_state = chart_facts.get('bearish_state', False)
+            else:
+                actual_state = chart_facts.get(req_state, False)
+            
+            if actual_state:
                  matched_conditions += 1
             else:
-                 failed_reasons.append(f"{chart} missing {req_cond}")
+                 failed_reasons.append(f"{chart} is not {req_state}")
                  
         match_logic = rule.get('match', 'ALL')
         is_match = False
