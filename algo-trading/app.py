@@ -16,7 +16,6 @@ from strategy.fibonacci_engine import get_fibonacci_levels, get_confluence_level
 from strategy.reference_box_engine import process_latest_candles, get_active_boxes as get_active_boxes_logic
 from strategy.strategy_monitor import monitor_strategy, calculate_live_statistics
 from strategy.buy_signal_engine import monitor_reference_boxes, get_active_signals as get_active_signals_logic, check_and_expire_signals
-from strategy.confirmation_engine import monitor_buy_signals, expire_old_sessions
 from strategy.execution_engine import monitor_confirmations, retry_execution as retry_execution_logic, cancel_execution as cancel_execution_logic
 from strategy.stop_loss_engine import (
     monitor_running_trades, execute_stop_loss, retry_exit_order as retry_exit_order_logic, expire_monitoring as expire_monitoring_logic
@@ -409,9 +408,8 @@ def get_data():
             }
             monitor_reference_boxes(g.user['id'], candles_dict)
             
-            # Run Confirmation Engine on unassigned active Buy Signals
-            monitor_buy_signals(g.user['id'])
-            
+            # Confirmation Engine is legacy, skip
+
             # Run Trade Execution Engine on CONFIRMED sessions
             monitor_confirmations(g.user['id'])
             
@@ -745,9 +743,9 @@ def get_confirmation_history_api():
 @app.route('/api/confirmations/refresh', methods=['POST'])
 @login_required
 def refresh_confirmations_api():
-    """Forces recalculation of confirmations."""
+    """Forces recalculation of confirmations (legacy, now dummy)."""
     try:
-        monitor_buy_signals(g.user['id'])
+        # Confirmation Engine is legacy, skip
         sessions = get_all_confirmations(g.user['id'])
         return jsonify({
             'status': 'success',
@@ -760,9 +758,9 @@ def refresh_confirmations_api():
 @app.route('/api/confirmations/expire', methods=['POST'])
 @login_required
 def expire_confirmations_api():
-    """Manually checks and expires timed-out sessions."""
+    """Manually checks and expires timed-out sessions (legacy, now dummy)."""
     try:
-        expire_old_sessions(g.user['id'])
+        # Expire legacy sessions (removed)
         sessions = get_all_confirmations(g.user['id'])
         return jsonify({
             'status': 'success',

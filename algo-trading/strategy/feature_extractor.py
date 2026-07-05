@@ -73,3 +73,14 @@ def extract_signals(candle, fib_level=None, ref_high=None, ref_low=None, toleran
             signals['bearish_state'] = True
 
     return signals
+
+def extract_facts(candle, box, ref_candle):
+    """
+    Adapter function that bridges the engine's box/ref_candle format
+    to the extract_signals function.
+    """
+    fib_level = box['fib_level'] if box else None
+    ref_high = ref_candle['high'] if ref_candle else None
+    ref_low = ref_candle['low'] if ref_candle else None
+    
+    return extract_signals(candle, fib_level, ref_high, ref_low)
