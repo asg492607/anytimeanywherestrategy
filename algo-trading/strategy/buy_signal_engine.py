@@ -56,11 +56,25 @@ def monitor_reference_boxes(user_id, candles_dict, db_adapter=None, execute_adap
     if 'PE' in candles_dict:
         mapped_candles['PE'] = candles_dict['PE']
 
+    # Map DB chart_type names to rule engine names
+    CHART_TYPE_MAP = {
+        'CALL': 'CE',
+        'PUT': 'PE',
+        'SPOT': 'SENSEX',
+        'CE': 'CE',
+        'PE': 'PE',
+        'SENSEX': 'SENSEX'
+    }
+    
     # Fetch active boxes (this tells us the Fib lines and Reference Highs/Lows)
     active_boxes = db_local.get_active_boxes(user_id)
     
-    # Map boxes by chart type for quick access
-    boxes_by_chart = {box['chart_type']: box for box in active_boxes}
+    # Map boxes by rule-engine chart name (CE/PE/SENSEX) for correct lookup
+    boxes_by_chart = {}
+    for box in active_boxes:
+        rule_key = CHART_TYPE_MAP.get(box['chart_type'])
+        if rule_key and rule_key not in boxes_by_chart:
+            boxes_by_chart[rule_key] = box
     
     # We will evaluate the rule engine on the absolute latest candle
     # In a live system, this runs every tick/second.
