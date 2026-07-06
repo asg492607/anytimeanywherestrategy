@@ -223,9 +223,12 @@ def start_websocket():
 
 
 # ─── Historical Data ───────────────────────────────────────────────────────────
-def get_historical_data(exchange, symboltoken, interval, days):
+def get_historical_data(exchange, symboltoken, interval, days=None, fromdate=None, todate=None):
     global LAST_API_CALL_TIME
-    cache_key = f"{symboltoken}_{interval}_{days}"
+    if fromdate and todate:
+        cache_key = f"{symboltoken}_{interval}_{fromdate}_{todate}"
+    else:
+        cache_key = f"{symboltoken}_{interval}_{days}"
     if cache_key in HISTORICAL_CACHE:
         ts, cached = HISTORICAL_CACHE[cache_key]
         if time.time() - ts < 60:
@@ -233,13 +236,19 @@ def get_historical_data(exchange, symboltoken, interval, days):
             
     for attempt in range(3):
         try:
-            now = datetime.now(IST)
+            if fromdate and todate:
+                f_date = fromdate
+                t_date = todate
+            else:
+                now = datetime.now(IST)
+                f_date = (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+                t_date = now.strftime("%Y-%m-%d %H:%M")
             params = {
                 "exchange"   : exchange,
                 "symboltoken": symboltoken,
                 "interval"   : interval,
-                "fromdate"   : (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M"),
-                "todate"     : now.strftime("%Y-%m-%d %H:%M")
+                "fromdate"   : f_date,
+                "todate"     : t_date
             }
             
             with API_LOCK:

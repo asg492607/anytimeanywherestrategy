@@ -12,10 +12,12 @@ from strategy.execution_engine import monitor_confirmations
 from strategy.stop_loss_engine import monitor_running_trades
 from strategy.target_engine import monitor_running_trades as monitor_targets_logic
 from strategy.strategy_monitor import monitor_strategy, calculate_live_statistics
-from strategy.fibonacci_engine import get_fibonacci_danger_zone
+from strategy.fibonacci_engine import get_fibonacci_danger_zone, group_into_weekly
 
 import simulate_db
 import simulate_execution
+import data_engine
+from data_engine import get_historical_data
 
 logger = logging.getLogger('simulate_engine')
 
@@ -76,186 +78,238 @@ def reset_simulation_db(user_id):
     finally:
         conn.close()
 
-def generate_deterministic_candles(date_str, ce_symbol, pe_symbol):
-    """
-    Generates 125 3-minute candles (09:15 to 15:30 IST) for a specific date.
-    Specifically pre-programmed to form a box, break out, trigger BUY_CE,
-    and then hit target or stop loss, to ensure strategy tests succeed.
-    """
+
+def resolve_token_robust(symbol, option_type, date_str):
+    if len(symbol) < 14:
+        return None, None
+    strike_str = symbol[11:-2]
+    try:
+        strike_val = float(strike_str)
+    except ValueError:
+        return None, None
+    
+    # Parse date_str to match expiry format in scrip master (e.g. 06JUL2026)
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError:
-        dt = datetime.now()
-
-    base_time = datetime(dt.year, dt.month, dt.day, 9, 15, 0, tzinfo=IST)
-    
-    candles = {
-        'SPOT': [],
-        'CALL': [],
-        'PUT': []
-    }
-    
-    # Pre-programmed patterns:
-    # 0 to 5: range-bound (forms reference box crossing 1.14 level)
-    # Monitored levels:
-    # SENSEX Weekly anchor: Low=77000, High=79000. Diff=2000.
-    # Level 1.14 = 77000 + 2000 * 1.14 = 79280.
-    # We will make candle 5 cross 79280.
-    
-    for i in range(125):
-        candle_time = int((base_time + timedelta(minutes=3*i)).timestamp())
+        return None, None
         
-        # 1. SPOT (SENSEX)
-        if i < 5:
-            # Range bound below 79280
-            c_open = 79250 + (i * 2)
-            c_close = 79260 - (i * 2)
-            c_high = max(c_open, c_close) + 5
-            c_low = min(c_open, c_close) - 5
-        elif i == 5:
-            # Crosses 79280! Open 79270, Close 79295 (Crosses 79280)
-            c_open = 79270
-            c_close = 79295
-            c_high = 79310 # Upper boundary of reference box
-            c_low = 79260  # Lower boundary of reference box
-        elif i < 10:
-            # Stays inside box boundaries (79260 to 79310)
-            c_open = 79280
-            c_close = 79285
-            c_high = 79290
-            c_low = 79270
-        elif i == 10:
-            # Breakout upwards! High 79350, Close 79340 (Breaks 79310)
-            c_open = 79285
-            c_close = 79340
-            c_high = 79350
-            c_low = 79280
-        elif i < 25:
-            # Continues upward trend to hit Target
-            c_open = 79340 + (i - 10) * 10
-            c_close = 79340 + (i - 10) * 10 + 8
-            c_high = c_close + 5
-            c_low = c_open - 5
-        else:
-            # Sideways after trade closes
-            c_open = 79490
-            c_close = 79485
-            c_high = 79500
-            c_low = 79480
+    expiry_match = dt.strftime("%d%b%Y").upper()
+    
+    for item in data_engine.SCRIP_MASTER_DATA:
+        if item.get('name') == 'SENSEX' and item.get('exch_seg') == 'BFO':
+            symbol_str = item.get('symbol', '')
+            if not symbol_str.endswith(option_type):
+                continue
+                
+            # Match expiry date
+            item_expiry = item.get('expiry', '')
+            if item_expiry.upper() != expiry_match:
+                continue
+                
+            # Match strike price (either raw or divided by 100)
+            item_strike = float(item.get('strike', 0))
+            if item_strike / 100.0 == strike_val or item_strike == strike_val:
+                return item['token'], item['symbol']
+                
+    return None, None
 
-        candles['SPOT'].append({
-            'time': candle_time, 'open': c_open, 'high': c_high, 'low': c_low, 'close': c_close, 'volume': 1000
-        })
-
-        # 2. CALL (CE) - Monitored Weekly anchor: Low=350, High=450. Diff=100.
-        # Level 1.14 = 350 + 100 * 1.14 = 464.
-        # We make CE follow SENSEX.
-        if i < 5:
-            ce_open = 460 + i
-            ce_close = 462 - i
-            ce_high = max(ce_open, ce_close) + 1
-            ce_low = min(ce_open, ce_close) - 1
-        elif i == 5:
-            # Crosses 464!
-            ce_open = 462
-            ce_close = 466
-            ce_high = 470 # Box Upper
-            ce_low = 460  # Box Lower
-        elif i < 10:
-            ce_open = 465
-            ce_close = 467
-            ce_high = 468
-            ce_low = 464
-        elif i == 10:
-            # Breakout CE! High 475, Close 474
-            ce_open = 467
-            ce_close = 474
-            ce_high = 475
-            ce_low = 466
-        elif i < 25:
-            # CE price rises to 520 (Target is at 350 + 100 * 1.39 = 489, so this will trigger target hit!)
-            ce_open = 474 + (i - 10) * 4
-            ce_close = 474 + (i - 10) * 4 + 3
-            ce_high = ce_close + 2
-            ce_low = ce_open - 2
-        else:
-            ce_open = 530
-            ce_close = 528
-            ce_high = 532
-            ce_low = 526
-
-        candles['CALL'].append({
-            'time': candle_time, 'open': ce_open, 'high': ce_high, 'low': ce_low, 'close': ce_close, 'volume': 500
-        })
-
-        # 3. PUT (PE) - Inverse of SENSEX/CE
-        if i < 5:
-            pe_open = 460 - i
-            pe_close = 458 + i
-            pe_high = max(pe_open, pe_close) + 1
-            pe_low = min(pe_open, pe_close) - 1
-        elif i == 5:
-            # Crosses 464 downwards
-            pe_open = 462
-            pe_close = 458
-            pe_high = 465
-            pe_low = 455
-        elif i < 10:
-            pe_open = 457
-            pe_close = 456
-            pe_high = 459
-            pe_low = 454
-        elif i == 10:
-            # Drops below low boundary (rejection)
-            pe_open = 456
-            pe_close = 448
-            pe_high = 457
-            pe_low = 446
-        elif i < 25:
-            pe_open = 448 - (i - 10) * 3
-            pe_close = 448 - (i - 10) * 3 - 2
-            pe_high = pe_open + 2
-            pe_low = pe_close - 2
-        else:
-            pe_open = 400
-            pe_close = 402
-            pe_high = 405
-            pe_low = 398
-
-        candles['PUT'].append({
-            'time': candle_time, 'open': pe_open, 'high': pe_high, 'low': pe_low, 'close': pe_close, 'volume': 500
-        })
-
-    return candles
 
 def start_simulation(user_id, date_str, ce_symbol=None, pe_symbol=None):
     """
     Starts a new simulation session for the user.
-    Loads/generates all 125 candles for the selected day.
+    Loads real 3-minute and daily historical candles from Angel One.
     """
-    if not ce_symbol:
-        ce_symbol = "SENSEX2670679000CE"
-    if not pe_symbol:
-        pe_symbol = "SENSEX2670679000PE"
-        
     reset_simulation_db(user_id)
     
-    # 1. Generate SENSEX, CALL, PUT candles
-    candles = generate_deterministic_candles(date_str, ce_symbol, pe_symbol)
+    # Ensure Angel One API is authenticated
+    if not data_engine.smartApi:
+        data_engine.initialize_angel_one()
+        # Wait up to 15 seconds for dynamic login to complete
+        for _ in range(30):
+            if data_engine.smartApi:
+                break
+            time.sleep(0.5)
+            
+    if not data_engine.smartApi:
+        return {'error': "Angel One API session is not authenticated. Please check your credentials or network."}
     
-    # 2. Setup mock weekly dashboard data to resolve Fib targets
+    # Ensure Scrip Master is loaded
+    if not data_engine.SCRIP_MASTER_DATA:
+        data_engine.fetch_tokens()
+
+    # Dynamically resolve default symbols if not provided
+    if not ce_symbol or not pe_symbol:
+        sim_dt = datetime.strptime(date_str, "%Y-%m-%d")
+        all_sensex_opts = []
+        for item in data_engine.SCRIP_MASTER_DATA:
+            if item.get('name') == 'SENSEX' and item.get('exch_seg') == 'BFO':
+                all_sensex_opts.append(item)
+                
+        future_opts = []
+        for opt in all_sensex_opts:
+            exp_str = opt.get('expiry', '')
+            if exp_str:
+                try:
+                    exp_dt = datetime.strptime(exp_str, "%d%b%Y")
+                    if exp_dt.date() >= sim_dt.date():
+                        future_opts.append((exp_dt, opt))
+                except Exception:
+                    pass
+                    
+        if future_opts:
+            future_opts.sort(key=lambda x: x[0])
+            nearest_exp_dt = future_opts[0][0]
+            nearest_opts = [x[1] for x in future_opts if x[0] == nearest_exp_dt]
+            
+            ce_opts = [x for x in nearest_opts if x['symbol'].endswith('CE')]
+            pe_opts = [x for x in nearest_opts if x['symbol'].endswith('PE')]
+            
+            # Sort by strike closest to 79000
+            def strike_diff(opt):
+                try:
+                    strike_val = float(opt.get('strike', 0))
+                    if strike_val > 100000:
+                        strike_val /= 100.0
+                    return abs(strike_val - 79000)
+                except Exception:
+                    return 99999
+                    
+            ce_opts.sort(key=strike_diff)
+            pe_opts.sort(key=strike_diff)
+            
+            if ce_opts and not ce_symbol:
+                ce_symbol = ce_opts[0]['symbol']
+            if pe_opts and not pe_symbol:
+                pe_symbol = pe_opts[0]['symbol']
+
+    # Fallback defaults if lookup yielded nothing
+    if not ce_symbol:
+        ce_symbol = "SENSEX2670979000CE"
+    if not pe_symbol:
+        pe_symbol = "SENSEX2670979000PE"
+
+    # Debug: Collect unique expiries and symbols for BFO SENSEX in 2026
+    import json
+    unique_expiries = {}
+    for item in data_engine.SCRIP_MASTER_DATA:
+        if item.get('name') == 'SENSEX' and item.get('exch_seg') == 'BFO':
+            exp = item.get('expiry', '')
+            if '2026' in exp:
+                if exp not in unique_expiries:
+                    unique_expiries[exp] = []
+                if len(unique_expiries[exp]) < 5:
+                    unique_expiries[exp].append(item.get('symbol'))
+                    
+    debug_info = {
+        "received_ce": ce_symbol,
+        "received_pe": pe_symbol,
+        "scrip_master_len": len(data_engine.SCRIP_MASTER_DATA),
+        "unique_expiries_2026": unique_expiries
+    }
+    with open("scratch/debug_scrip_master.json", "w") as f:
+        json.dump(debug_info, f, indent=2)
+
+    # Resolve Option Tokens
+    ce_token, ce_master_symbol = resolve_token_robust(ce_symbol, 'CE', date_str)
+    pe_token, pe_master_symbol = resolve_token_robust(pe_symbol, 'PE', date_str)
+    
+    # Fallback to exact match lookup if robust lookup returned nothing
+    if not ce_token or not pe_token:
+        for item in data_engine.SCRIP_MASTER_DATA:
+            if item.get('symbol') == ce_symbol:
+                ce_token = item['token']
+                ce_master_symbol = item['symbol']
+            if item.get('symbol') == pe_symbol:
+                pe_token = item['token']
+                pe_master_symbol = item['symbol']
+
+    if not ce_token or not pe_token:
+        return {'error': f"Tokens not found in scrip master for CE symbol '{ce_symbol}' or PE symbol '{pe_symbol}'"}
+        
+    print(f"Selected CE Symbol: {ce_symbol}")
+    print(f"Resolved Token: {ce_token}")
+    print(f"Exchange: BFO")
+    print(f"Matched Scrip Master Symbol: {ce_master_symbol}")
+    print(f"Selected PE Symbol: {pe_symbol}")
+    print(f"Resolved Token: {pe_token}")
+    print(f"Exchange: BFO")
+    print(f"Matched Scrip Master Symbol: {pe_master_symbol}")
+
+
+        
+    # 1. Fetch real historical 3-minute candles from Angel One
+    fromdate_3m = f"{date_str} 09:00"
+    todate_3m = f"{date_str} 15:45"
+    
+    raw_sensex = get_historical_data('BSE', '99919000', 'THREE_MINUTE', fromdate=fromdate_3m, todate=todate_3m)
+    raw_ce = get_historical_data('BFO', ce_token, 'THREE_MINUTE', fromdate=fromdate_3m, todate=todate_3m)
+    raw_pe = get_historical_data('BFO', pe_token, 'THREE_MINUTE', fromdate=fromdate_3m, todate=todate_3m)
+    
+    if not raw_sensex or not raw_ce or not raw_pe:
+        return {
+            'error': f"Could not fetch historical 3-minute candles from Angel One for SENSEX, CE, or PE on {date_str}. "
+                     f"Please verify Angel One API is logged in, and that {date_str} is a valid trading day."
+        }
+        
+    # Filter function for market hours (09:15 to 15:30 IST)
+    def filter_market_hours(candles):
+        filtered = []
+        for c in candles:
+            dt = datetime.fromtimestamp(c['time'], tz=IST)
+            if (dt.hour > 9 or (dt.hour == 9 and dt.minute >= 15)) and (dt.hour < 15 or (dt.hour == 15 and dt.minute <= 30)):
+                filtered.append(c)
+        return filtered
+
+    filtered_sensex = filter_market_hours(raw_sensex)
+    filtered_ce = filter_market_hours(raw_ce)
+    filtered_pe = filter_market_hours(raw_pe)
+    
+    # Align by common timestamps to ensure perfect synchronization
+    common_times = set(c['time'] for c in filtered_sensex) & set(c['time'] for c in filtered_ce) & set(c['time'] for c in filtered_pe)
+    sorted_common_times = sorted(list(common_times))
+    
+    if not sorted_common_times:
+        return {'error': f"No aligned trading candles found for SENSEX, CE, and PE on {date_str} during market hours."}
+        
+    sensex_map = {c['time']: c for c in filtered_sensex}
+    ce_map = {c['time']: c for c in filtered_ce}
+    pe_map = {c['time']: c for c in filtered_pe}
+    
+    candles = {
+        'SPOT': [sensex_map[t] for t in sorted_common_times],
+        'CALL': [ce_map[t] for t in sorted_common_times],
+        'PUT': [pe_map[t] for t in sorted_common_times]
+    }
+    
+    total_candles = len(sorted_common_times)
+    
+    # 2. Fetch daily candles to calculate accurate weekly Fibonacci levels
+    dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
+    fromdate_1d = (dt_obj - timedelta(days=60)).strftime("%Y-%m-%d 09:15")
+    todate_1d = dt_obj.strftime("%Y-%m-%d 15:30")
+    
+    sx_1d = get_historical_data('BSE', '99919000', 'ONE_DAY', fromdate=fromdate_1d, todate=todate_1d) or []
+    ce_1d = get_historical_data('BFO', ce_token, 'ONE_DAY', fromdate=fromdate_1d, todate=todate_1d) or []
+    pe_1d = get_historical_data('BFO', pe_token, 'ONE_DAY', fromdate=fromdate_1d, todate=todate_1d) or []
+    
+    sx_1w = group_into_weekly(sx_1d) if sx_1d else []
+    ce_1w = group_into_weekly(ce_1d) if ce_1d else []
+    pe_1w = group_into_weekly(pe_1d) if pe_1d else []
+    
+    # Fallback to current intraday if daily/weekly is empty
     weekly_fibs_dict = {
         'sensex': {
             'symbol': 'SENSEX',
-            'weekly': [{'time': 1720000000, 'open': 78000, 'high': 79000, 'low': 77000, 'close': 78500}]
+            'weekly': sx_1w if sx_1w else [{'time': sorted_common_times[0], 'open': candles['SPOT'][0]['open'], 'high': max(c['high'] for c in candles['SPOT']), 'low': min(c['low'] for c in candles['SPOT']), 'close': candles['SPOT'][-1]['close']}]
         },
         'call': {
             'symbol': ce_symbol,
-            'weekly': [{'time': 1720000000, 'open': 380, 'high': 450, 'low': 350, 'close': 400}]
+            'weekly': ce_1w if ce_1w else [{'time': sorted_common_times[0], 'open': candles['CALL'][0]['open'], 'high': max(c['high'] for c in candles['CALL']), 'low': min(c['low'] for c in candles['CALL']), 'close': candles['CALL'][-1]['close']}]
         },
         'put': {
             'symbol': pe_symbol,
-            'weekly': [{'time': 1720000000, 'open': 380, 'high': 450, 'low': 350, 'close': 400}]
+            'weekly': pe_1w if pe_1w else [{'time': sorted_common_times[0], 'open': candles['PUT'][0]['open'], 'high': max(c['high'] for c in candles['PUT']), 'low': min(c['low'] for c in candles['PUT']), 'close': candles['PUT'][-1]['close']}]
         }
     }
     
@@ -277,7 +331,7 @@ def start_simulation(user_id, date_str, ce_symbol=None, pe_symbol=None):
         'ce_symbol': ce_symbol,
         'pe_symbol': pe_symbol,
         'current_index': 0,
-        'total_candles': 125,
+        'total_candles': total_candles,
         'candles': candles,
         'weekly_fibs_dict': weekly_fibs_dict,
         'weekly_fibs': weekly_fibs
@@ -291,7 +345,7 @@ def start_simulation(user_id, date_str, ce_symbol=None, pe_symbol=None):
         'status': 'RUNNING',
         'date': date_str,
         'current_index': 0,
-        'total_candles': 125
+        'total_candles': total_candles
     }
 
 def stop_simulation(user_id):
@@ -299,6 +353,7 @@ def stop_simulation(user_id):
     if user_id in SIMULATION_SESSIONS:
         del SIMULATION_SESSIONS[user_id]
     return {'status': 'IDLE'}
+
 
 def tick_simulation(user_id):
     """

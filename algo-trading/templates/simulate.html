@@ -848,17 +848,16 @@
         }
 
         // ─── 6. Stream a partial (live-building) candle to charts ────────────
-        // Uses the *next* candle's OHLCV data and interpolates progress.
+        // Animates only the active forming candle, leaving completed candles immutable.
         function streamPartialCandle() {
             if (!_simSession || !_simSession.candles) return;
-            const progress = _subTickIndex / SUB_TICKS_PER_CANDLE; // 0.1 to 0.9
+            const progress = _subTickIndex / SUB_TICKS_PER_CANDLE; // 0.0 to 0.9
 
             ['SPOT', 'CALL', 'PUT'].forEach((key, chartIdx) => {
                 const allCandles = _simSession.candles[key];
                 if (!allCandles || allCandles.length < 1) return;
 
-                // The LAST candle in the already-committed slice is our base;
-                // we simulate its "live" progression toward the next candle's close.
+                // The last candle in the session slice is the active forming candle
                 const committed = allCandles[allCandles.length - 1];
                 const chartObj = window.activeCharts ? window.activeCharts[chartIdx] : null;
                 if (!chartObj || !chartObj.candleSeries) return;
@@ -876,6 +875,31 @@
                     close:  liveClose,
                     volume: Math.round(committed.volume * progress)
                 });
+
+                if (chartObj.volumeSeries) {
+                    chartObj.volumeSeries.update({
+                        time: committed.time,
+                        value: Math.round(committed.volume * progress),
+                        color: liveClose >= committed.open ? 'rgba(8, 153, 129, 0.5)' : 'rgba(242, 54, 69, 0.5)'
+                    });
+                }
+
+                // Update text overlays to reflect the live forming candle values
+                const containerId = chartIdx === 0 ? 'sensex-3m-chart' : (chartIdx === 1 ? 'call-3m-chart' : 'put-3m-chart');
+                const upClass = liveClose >= committed.open ? 'up' : 'down';
+                const els = ['o', 'h', 'l', 'c'].map(id => document.getElementById(`${containerId}-${id}`));
+                if (els[0]) {
+                    els[0].textContent = committed.open.toFixed(2);
+                    els[1].textContent = liveHigh.toFixed(2);
+                    els[2].textContent = liveLow.toFixed(2);
+                    els[3].textContent = liveClose.toFixed(2);
+                    els.forEach(el => el.className = `val ${upClass}`);
+                    
+                    const vEl = document.getElementById(`${containerId}-v`);
+                    if (vEl) {
+                        vEl.textContent = ((committed.volume * progress) / 1000).toFixed(3) + 'K';
+                    }
+                }
             });
         }
 
@@ -902,7 +926,18 @@
 
                 // ── Charts (reuses renderDashboard from main.js exactly as live mode) ──
                 if (window.renderDashboard) {
-                    window.renderDashboard(data);
+                    const clonedData = JSON.parse(JSON.stringify(data));
+                    ['sensex', 'call', 'put'].forEach(key => {
+                        if (clonedData[key] && clonedData[key].intraday) {
+                            const curIdx = clonedData.current_index || 0;
+                            // Slice to only render candles 0 to K-1 as immutable/completed
+                            clonedData[key].intraday = clonedData[key].intraday.slice(0, curIdx);
+                        }
+                    });
+                    window.renderDashboard(clonedData);
+
+                    // Instantly render the first tick of the active forming candle K
+                    streamPartialCandle();
                 }
 
                 // ── Reference Boxes ──────────────────────────────────────────────────
