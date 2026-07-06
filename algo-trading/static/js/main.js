@@ -2035,6 +2035,9 @@ document.addEventListener('DOMContentLoaded', () => {
         window.updateExecutionsUI     = updateExecutionsUI;
         window.drawReferenceBoxes     = drawReferenceBoxes;
         window.drawVisualIndicators   = drawVisualIndicators;
+        window.updateConfirmationTimelineUI = typeof updateConfirmationTimelineUI !== 'undefined' ? updateConfirmationTimelineUI : null;
+        window.handleManualExit       = typeof handleManualExit !== 'undefined' ? handleManualExit : null;
+        window.pollLivePnL            = typeof pollLivePnL !== 'undefined' ? pollLivePnL : null;
     }
 });
 
@@ -2387,16 +2390,7 @@ function fmtTime(ts) {
     } catch { return ts; }
 }
 
-/* ── Export monitoring functions for simulation reuse ── */
-window.drawReferenceBoxes = drawReferenceBoxes;
-window.updateReferenceBoxesUI = updateReferenceBoxesUI;
-window.updateBuySignalsUI = updateBuySignalsUI;
-window.updateExecutionsUI = updateExecutionsUI;
-window.drawVisualIndicators = drawVisualIndicators;
-window.updateConfirmationTimelineUI = updateConfirmationTimelineUI;
-window.updatePnLUI = updatePnLUI;
-window.handleManualExit = handleManualExit;
-window.pollLivePnL = pollLivePnL;
+/* ── Cleanup of invalid exports ── */
 window.syncActiveSymbols = function(data) {
     if (data.call && data.call.symbol) activeCeSymbol = data.call.symbol;
     if (data.put && data.put.symbol) activePeSymbol = data.put.symbol;

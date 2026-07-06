@@ -929,9 +929,9 @@
                     const clonedData = JSON.parse(JSON.stringify(data));
                     ['sensex', 'call', 'put'].forEach(key => {
                         if (clonedData[key] && clonedData[key].intraday) {
-                            const curIdx = clonedData.current_index || 0;
-                            // Slice to only render candles 0 to K-1 as immutable/completed
-                            clonedData[key].intraday = clonedData[key].intraday.slice(0, curIdx);
+                            // The backend prepends historical candles. The last element is the forming candle.
+                            // We slice off the last element so renderDashboard draws only immutable/completed candles.
+                            clonedData[key].intraday = clonedData[key].intraday.slice(0, -1);
                         }
                     });
                     window.renderDashboard(clonedData);

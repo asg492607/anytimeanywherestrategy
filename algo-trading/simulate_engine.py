@@ -238,8 +238,10 @@ def start_simulation(user_id, date_str, ce_symbol=None, pe_symbol=None):
 
 
         
-    # 1. Fetch real historical 3-minute candles from Angel One
-    fromdate_3m = f"{date_str} 09:00"
+    # 1. Fetch real historical 3-minute candles from Angel One (including ~20 prior trading days context)
+    dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
+    fromdate_3m_obj = dt_obj - timedelta(days=30)
+    fromdate_3m = fromdate_3m_obj.strftime("%Y-%m-%d 09:15")
     todate_3m = f"{date_str} 15:45"
     
     raw_sensex = get_historical_data('BSE', '99919000', 'THREE_MINUTE', fromdate=fromdate_3m, todate=todate_3m)
@@ -276,13 +278,25 @@ def start_simulation(user_id, date_str, ce_symbol=None, pe_symbol=None):
     ce_map = {c['time']: c for c in filtered_ce}
     pe_map = {c['time']: c for c in filtered_pe}
     
-    candles = {
-        'SPOT': [sensex_map[t] for t in sorted_common_times],
-        'CALL': [ce_map[t] for t in sorted_common_times],
-        'PUT': [pe_map[t] for t in sorted_common_times]
+    sim_day_start_dt = datetime.strptime(f"{date_str} 00:00", "%Y-%m-%d %H:%M").replace(tzinfo=IST)
+    sim_day_start_ts = int(sim_day_start_dt.timestamp())
+    
+    historical_times = [t for t in sorted_common_times if t < sim_day_start_ts]
+    sim_times = [t for t in sorted_common_times if t >= sim_day_start_ts]
+    
+    historical_candles = {
+        'SPOT': [sensex_map[t] for t in historical_times],
+        'CALL': [ce_map[t] for t in historical_times],
+        'PUT': [pe_map[t] for t in historical_times]
     }
     
-    total_candles = len(sorted_common_times)
+    candles = {
+        'SPOT': [sensex_map[t] for t in sim_times],
+        'CALL': [ce_map[t] for t in sim_times],
+        'PUT': [pe_map[t] for t in sim_times]
+    }
+    
+    total_candles = len(sim_times)
     
     # 2. Fetch daily candles to calculate accurate weekly Fibonacci levels
     dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
@@ -315,9 +329,12 @@ def start_simulation(user_id, date_str, ce_symbol=None, pe_symbol=None):
     
     # 3. Calculate weekly fib levels
     from strategy.fibonacci_engine import get_fibonacci_levels
-    sx_res = get_fibonacci_levels(weekly_fibs_dict['sensex']['weekly'])
-    ce_res = get_fibonacci_levels(weekly_fibs_dict['call']['weekly'])
-    pe_res = get_fibonacci_levels(weekly_fibs_dict['put']['weekly'])
+    from data_engine import MANUAL_FIBS
+    dynamic_fibs = dict(MANUAL_FIBS)
+    
+    sx_res = get_fibonacci_levels(weekly_fibs_dict['sensex']['weekly'], 'SENSEX', dynamic_fibs)
+    ce_res = get_fibonacci_levels(weekly_fibs_dict['call']['weekly'], ce_symbol, dynamic_fibs)
+    pe_res = get_fibonacci_levels(weekly_fibs_dict['put']['weekly'], pe_symbol, dynamic_fibs)
     
     weekly_fibs = {
         'SENSEX': sx_res[0] if sx_res else {},
@@ -332,6 +349,7 @@ def start_simulation(user_id, date_str, ce_symbol=None, pe_symbol=None):
         'pe_symbol': pe_symbol,
         'current_index': 0,
         'total_candles': total_candles,
+        'historical_candles': historical_candles,
         'candles': candles,
         'weekly_fibs_dict': weekly_fibs_dict,
         'weekly_fibs': weekly_fibs
@@ -470,9 +488,9 @@ def get_simulation_data(user_id):
     
     # Slice candles
     sliced_candles = {
-        'SPOT': session['candles']['SPOT'][:current_idx + 1],
-        'CALL': session['candles']['CALL'][:current_idx + 1],
-        'PUT': session['candles']['PUT'][:current_idx + 1]
+        'SPOT': session.get('historical_candles', {}).get('SPOT', []) + session['candles']['SPOT'][:current_idx + 1],
+        'CALL': session.get('historical_candles', {}).get('CALL', []) + session['candles']['CALL'][:current_idx + 1],
+        'PUT': session.get('historical_candles', {}).get('PUT', []) + session['candles']['PUT'][:current_idx + 1]
     }
     
     # Read trades and reference boxes from simulation.db
@@ -580,9 +598,12 @@ def get_simulation_data(user_id):
     }
     
     # Format weekly fibonacci levels for charts
-    sx_fibs = get_fibonacci_danger_zone(session['weekly_fibs_dict']['sensex']['weekly'], 'SENSEX')
-    ce_fibs = get_fibonacci_danger_zone(session['weekly_fibs_dict']['call']['weekly'], session['ce_symbol'])
-    pe_fibs = get_fibonacci_danger_zone(session['weekly_fibs_dict']['put']['weekly'], session['pe_symbol'])
+    from data_engine import MANUAL_FIBS
+    dynamic_fibs = dict(MANUAL_FIBS)
+    
+    sx_fibs = get_fibonacci_danger_zone(session['weekly_fibs_dict']['sensex']['weekly'], 'SENSEX', dynamic_fibs)
+    ce_fibs = get_fibonacci_danger_zone(session['weekly_fibs_dict']['call']['weekly'], session['ce_symbol'], dynamic_fibs)
+    pe_fibs = get_fibonacci_danger_zone(session['weekly_fibs_dict']['put']['weekly'], session['pe_symbol'], dynamic_fibs)
     
     sx_anchor = (sx_fibs[-1]['anchor_high'], sx_fibs[-1]['anchor_low']) if sx_fibs else (None, None)
     ce_anchor = (ce_fibs[-1]['anchor_high'], ce_fibs[-1]['anchor_low']) if ce_fibs else (None, None)
