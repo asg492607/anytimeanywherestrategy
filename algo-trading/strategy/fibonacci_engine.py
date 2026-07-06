@@ -106,13 +106,22 @@ def _calc_level(key, high, low):
         return high - diff * ratio
     return low - diff * ratio
 
-def _auto_weekly_high_low(weekly_df):
+def _auto_weekly_high_low(weekly_df, symbol='SENSEX'):
     """Derives previous completed week's anchor boundaries."""
     if not weekly_df:
         return None, None, None, None
 
     now = datetime.now(IST)
     current_iso_year, current_iso_week, _ = now.isocalendar()
+
+    # For options, they only live for a week, so use the entire lifetime's high/low
+    if symbol != 'SENSEX':
+        max_high = max([_filter_spike(w)['high'] for w in weekly_df])
+        min_low = min([_filter_spike(w)['low'] for w in weekly_df])
+        dt = datetime.fromtimestamp(weekly_df[-1]['time'], tz=IST).date()
+        start = dt - timedelta(days=dt.weekday())
+        end = start + timedelta(days=4)
+        return max_high, min_low, start, end
 
     completed_week = None
     for w in reversed(weekly_df):
@@ -149,7 +158,7 @@ def get_fibonacci_levels(weekly_df, symbol='SENSEX', manual_fibs=None):
         start = now - timedelta(days=now.weekday())
         end = start + timedelta(days=4)
     else:
-        high, low, start, end = _auto_weekly_high_low(weekly_df)
+        high, low, start, end = _auto_weekly_high_low(weekly_df, symbol)
         if high is None:
             return None
 

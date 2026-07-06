@@ -115,10 +115,29 @@ def fetch_tokens():
                 ce_opts.sort(key=lambda x: abs(get_strike(x) - spot))
                 pe_opts.sort(key=lambda x: abs(get_strike(x) - spot))
                 
-                # Pick a slightly ITM/ATM contract that usually trades 400-500
-                DEFAULT_CE = ce_opts[0]['symbol']
-                DEFAULT_PE = pe_opts[0]['symbol']
-                print(f"Auto-resolved default tokens based on spot {spot}: {DEFAULT_CE}, {DEFAULT_PE}")
+                # Fetch LTP for the closest 10 strikes to find one > 430
+                def find_target_strike(options_list):
+                    best_opt = options_list[0]
+                    best_diff = float('inf')
+                    
+                    if smartApi:
+                        for opt in options_list[:10]:
+                            try:
+                                res = smartApi.ltpData(opt['exch_seg'], opt['symbol'], opt['token'])
+                                if res and res.get('status') and res.get('data'):
+                                    ltp = res['data']['ltp']
+                                    if ltp > 430:
+                                        diff = ltp - 430
+                                        if diff < best_diff:
+                                            best_diff = diff
+                                            best_opt = opt
+                            except Exception:
+                                pass
+                    return best_opt['symbol']
+                
+                DEFAULT_CE = find_target_strike(ce_opts)
+                DEFAULT_PE = find_target_strike(pe_opts)
+                print(f"Auto-resolved default tokens based on spot {spot} and LTP > 430: {DEFAULT_CE}, {DEFAULT_PE}")
 
 
 def search_contracts(query):
@@ -423,8 +442,8 @@ def _fetch_all_data():
                     'low':  o_day_for_s_low['low']
                 }
 
-    add_true_anchors(ce_sym, ce_1w, ce_1d, sx_1w, sx_1d, False)
-    add_true_anchors(pe_sym, pe_1w, pe_1d, sx_1w, sx_1d, True)
+    # add_true_anchors(ce_sym, ce_1w, ce_1d, sx_1w, sx_1d, False)
+    # add_true_anchors(pe_sym, pe_1w, pe_1d, sx_1w, sx_1d, True)
 
     sx_fibs = get_fibonacci_danger_zone(sx_1w, sx_sym, dynamic_fibs)
     ce_fibs = get_fibonacci_danger_zone(ce_1w, ce_sym, dynamic_fibs)
