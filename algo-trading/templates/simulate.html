@@ -159,6 +159,7 @@
         <span class="sep">|</span>
         <span id="sim-status-lbl">IDLE</span>
         <span id="sim-time-lbl" style="margin-left:4px;">--:-- --</span>
+        <strong id="sim-timer-lbl" style="color: #f23645; font-size: 14px; margin-left: 10px;">03:00</strong>
         <div id="sim-progress-bar"><div id="sim-progress-fill"></div></div>
         <span id="sim-candle-lbl" style="color:#787b86; font-size:12px; white-space:nowrap;">0 / 125</span>
         <span class="sep">|</span>
@@ -752,6 +753,7 @@
                 $('sim-time-lbl').textContent = d.toLocaleTimeString('en-IN', {
                     timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true
                 });
+                $('sim-timer-lbl').textContent = '03:00';
             }
         }
 
@@ -807,6 +809,7 @@
             try { await fetch('/api/simulate/stop', { method: 'POST' }); } catch(e) {}
             setControlState('IDLE');
             $('sim-time-lbl').textContent = '--:-- --';
+            $('sim-timer-lbl').textContent = '03:00';
             $('sim-progress-fill').style.width = '0%';
             $('sim-candle-lbl').textContent = '0 / 125';
         }
@@ -852,6 +855,12 @@
         function streamPartialCandle() {
             if (!_simSession || !_simSession.candles) return;
             const progress = _subTickIndex / SUB_TICKS_PER_CANDLE; // 0.0 to 0.9
+
+            // Update simulation timer (3 minutes = 180 seconds)
+            const remainingSeconds = Math.max(0, 180 - Math.floor(progress * 180));
+            const mins = Math.floor(remainingSeconds / 60).toString().padStart(2, '0');
+            const secs = (remainingSeconds % 60).toString().padStart(2, '0');
+            $('sim-timer-lbl').textContent = `${mins}:${secs}`;
 
             ['SPOT', 'CALL', 'PUT'].forEach((key, chartIdx) => {
                 const allCandles = _simSession.candles[key];
