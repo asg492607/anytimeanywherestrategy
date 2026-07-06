@@ -667,19 +667,22 @@
         const SUB_TICKS_PER_CANDLE = 10;     // intra-candle update resolution
 
         const REPLAY_SPEED_MS = {
-            '1x':      (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 1000,  // 18000ms per sub-tick → full candle in 3min real time
-            '2x':      (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 500,   // 9000ms per sub-tick
-            '5x':      (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 200,   // 3600ms
-            '10x':     (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 100,   // 1800ms
-            'Instant': 50                                                          // near-instant
+            '1x':      (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 1000,
+            '2x':      (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 500,
+            '5x':      (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 200,
+            '10x':     (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 100,
+            'Instant': 50
         };
 
         // ─── State ────────────────────────────────────────────────────────────
         let _simState = 'IDLE';          // IDLE | RUNNING | PAUSED | COMPLETED
-        let _subTickInterval = null;     // setInterval handle for intra-candle ticks
-        let _subTickIndex = 0;           // which sub-tick within current candle (0-9)
-        let _currentCandle = null;       // { SPOT, CALL, PUT } candle being streamed
-        let _nextCandle = null;          // pre-loaded next candle
+        let _animFrameId = null;         // requestAnimationFrame handle
+        let _animationStartTime = null;  // timestamp when current candle animation started
+        let _currentCandleDuration = 0;  // total duration in ms for the current candle
+        let _pauseProgress = 0.0;        // progress (0.0 to 1.0) when paused
+        let _currentProgress = 0.0;      // active rendering progress
+        let _currentCandle = null;       // unused legacy placeholder
+        let _nextCandle = null;          // unused legacy placeholder
         let _simSession = null;          // data returned by /api/simulate/data
 
         // ─── DOM references ───────────────────────────────────────────────────
@@ -704,8 +707,9 @@
         btnRestart.addEventListener('click', () => { stopSim().then(startSim); });
         btnStop.addEventListener('click', stopSim);
         speedSel.addEventListener('change', () => {
-            // If already playing, restart interval with new speed
-            if (_simState === 'RUNNING') { clearInterval(_subTickInterval); scheduleSubTick(); }
+            if (_simState === 'RUNNING') {
+                startCandleAnimation(_currentProgress);
+            }
         });
 
         // ─── Toast helper ─────────────────────────────────────────────────────
@@ -774,7 +778,8 @@
 
                 // Fetch initial data to draw charts
                 await fetchSimData(true);
-                scheduleSubTick();
+                _currentProgress = 0.0;
+                startCandleAnimation(0.0);
             } catch(e) {
                 console.error(e);
                 simToast('❌ Network error', 'sell');
@@ -785,11 +790,12 @@
         // ─── 2. Play / Pause ─────────────────────────────────────────────────
         function playSim() {
             setControlState('RUNNING');
-            scheduleSubTick();
+            startCandleAnimation(_currentProgress >= 1.0 ? 0.0 : _currentProgress);
         }
         function pauseSim() {
-            clearInterval(_subTickInterval);
-            _subTickInterval = null;
+            if (_animFrameId) cancelAnimationFrame(_animFrameId);
+            _animFrameId = null;
+            _pauseProgress = _currentProgress;
             setControlState('PAUSED');
         }
 
@@ -802,9 +808,10 @@
 
         // ─── 4. Stop ─────────────────────────────────────────────────────────
         async function stopSim() {
-            clearInterval(_subTickInterval);
-            _subTickInterval = null;
-            _subTickIndex = 0;
+            if (_animFrameId) cancelAnimationFrame(_animFrameId);
+            _animFrameId = null;
+            _currentProgress = 0.0;
+            _pauseProgress = 0.0;
             _currentCandle = null;
             try { await fetch('/api/simulate/stop', { method: 'POST' }); } catch(e) {}
             setControlState('IDLE');
@@ -814,47 +821,54 @@
             $('sim-candle-lbl').textContent = '0 / 125';
         }
 
-        // ─── 5. Intra-candle sub-tick scheduler ──────────────────────────────
-        // Each 3-minute candle is divided into SUB_TICKS_PER_CANDLE sub-ticks.
-        // On each sub-tick we interpolate an "in-progress" live candle and
-        // update the chart without advancing the backend.
-        // When the last sub-tick fires, we call serverTick() to close the candle
-        // and load the next one from the backend.
-        function scheduleSubTick() {
-            if (_subTickInterval) clearInterval(_subTickInterval);
+        // ─── 5. Candle Animation Loop ────────────────────────────────────────
+        function startCandleAnimation(fromProgress = 0.0) {
+            if (_animFrameId) cancelAnimationFrame(_animFrameId);
+
             const speed = speedSel.value;
-            const delay = REPLAY_SPEED_MS[speed] || REPLAY_SPEED_MS['1x'];
-            _subTickInterval = setInterval(onSubTick, delay);
+            const fullDuration = (REPLAY_SPEED_MS[speed] || REPLAY_SPEED_MS['1x']) * SUB_TICKS_PER_CANDLE;
+
+            _currentCandleDuration = fullDuration;
+            _pauseProgress = fromProgress;
+            _animationStartTime = performance.now();
+
+            function tick(now) {
+                if (_simState !== 'RUNNING') return;
+
+                const elapsed = now - _animationStartTime;
+                const addedProgress = elapsed / _currentCandleDuration;
+                _currentProgress = Math.min(1.0, _pauseProgress + addedProgress);
+
+                renderProgressFrame(_currentProgress);
+
+                if (_currentProgress < 1.0) {
+                    _animFrameId = requestAnimationFrame(tick);
+                } else {
+                    _animFrameId = null;
+                    onCandleComplete();
+                }
+            }
+
+            _animFrameId = requestAnimationFrame(tick);
         }
 
-        async function onSubTick() {
-            if (_subTickIndex < SUB_TICKS_PER_CANDLE - 1) {
-                // Intermediate tick: stream partial candle to chart
-                _subTickIndex++;
-                streamPartialCandle();
-            } else {
-                // Final sub-tick for this candle: close it and advance
-                _subTickIndex = 0;
-                clearInterval(_subTickInterval);
-                _subTickInterval = null;
-
-                const res = await serverTick();
-                if (res && res.status === 'COMPLETED') {
-                    await fetchSimData(false);
-                    setControlState('COMPLETED');
-                    simToast('🏁 Simulation day complete!', 'buy');
-                    return;
-                }
+        async function onCandleComplete() {
+            const res = await serverTick();
+            if (res && res.status === 'COMPLETED') {
                 await fetchSimData(false);
-                if (_simState === 'RUNNING') scheduleSubTick();
+                setControlState('COMPLETED');
+                simToast('🏁 Simulation day complete!', 'buy');
+                return;
+            }
+            await fetchSimData(false);
+            if (_simState === 'RUNNING') {
+                startCandleAnimation(0.0);
             }
         }
 
-        // ─── 6. Stream a partial (live-building) candle to charts ────────────
-        // Animates only the active forming candle, leaving completed candles immutable.
-        function streamPartialCandle() {
+        // ─── 6. Render progress frame (interpolated live-building candle) ───
+        function renderProgressFrame(progress) {
             if (!_simSession || !_simSession.candles) return;
-            const progress = _subTickIndex / SUB_TICKS_PER_CANDLE; // 0.0 to 0.9
 
             // Update simulation timer (3 minutes = 180 seconds)
             const remainingSeconds = Math.max(0, 180 - Math.floor(progress * 180));
@@ -871,7 +885,7 @@
                 const chartObj = window.activeCharts ? window.activeCharts[chartIdx] : null;
                 if (!chartObj || !chartObj.candleSeries) return;
 
-                // Interpolate close price between open and final close
+                // Interpolate OHLC
                 const liveClose = committed.open + (committed.close - committed.open) * progress;
                 const liveHigh  = committed.open + (committed.high  - committed.open) * Math.min(progress * 1.3, 1);
                 const liveLow   = committed.open - (committed.open  - committed.low)  * Math.min(progress * 1.3, 1);
@@ -922,6 +936,10 @@
                 pauseSim();
                 return null;
             }
+        }
+
+        function streamPartialCandle() {
+            renderProgressFrame(_currentProgress);
         }
 
         // ─── 8. Fetch full simulation state and render ────────────────────────
