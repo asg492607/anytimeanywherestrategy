@@ -20,8 +20,10 @@ function showToast(message, type = 'buy') {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    fetchData();
-    initSearch();
+    if (!window.IS_SIMULATION) {
+        fetchData();
+        initSearch();
+    }
 });
 
 let debounceTimer;
@@ -406,30 +408,32 @@ function renderDashboard(data) {
         }
     }
 
-    // ── Always-on live candle ticking ─────────────────────────────────────────
-    setInterval(async () => {
-        try {
-            const res = await fetch('/api/live');
-            if (res.status === 401) {
-                window.location.href = '/login';
-                return;
-            }
-            if (!res.ok) return;
-            const liveData = await res.json();
-            const now = Math.floor(Date.now() / 1000);
+    // ── Always-on live candle ticking (live mode only) ────────────────────────
+    if (!window.IS_SIMULATION) {
+        setInterval(async () => {
+            try {
+                const res = await fetch('/api/live');
+                if (res.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
+                if (!res.ok) return;
+                const liveData = await res.json();
+                const now = Math.floor(Date.now() / 1000);
 
-            if (Object.keys(liveData).length > 0) {
-                if (liveData.SENSEX && liveData.SENSEX.ltp !== undefined)
-                    processLiveTick(sensexChart, 'sensex-3m-chart', liveData.SENSEX.ltp, now);
-                if (liveData.CALL && liveData.CALL.ltp !== undefined)
-                    processLiveTick(callChart, 'call-3m-chart', liveData.CALL.ltp, now);
-                if (liveData.PUT && liveData.PUT.ltp !== undefined)
-                    processLiveTick(putChart, 'put-3m-chart', liveData.PUT.ltp, now);
+                if (Object.keys(liveData).length > 0) {
+                    if (liveData.SENSEX && liveData.SENSEX.ltp !== undefined)
+                        processLiveTick(sensexChart, 'sensex-3m-chart', liveData.SENSEX.ltp, now);
+                    if (liveData.CALL && liveData.CALL.ltp !== undefined)
+                        processLiveTick(callChart, 'call-3m-chart', liveData.CALL.ltp, now);
+                    if (liveData.PUT && liveData.PUT.ltp !== undefined)
+                        processLiveTick(putChart, 'put-3m-chart', liveData.PUT.ltp, now);
+                }
+            } catch (e) {
+                if (e.name !== 'TypeError') console.error('Live tick error', e);
             }
-        } catch (e) {
-            if (e.name !== 'TypeError') console.error('Live tick error', e);
-        }
-    }, 500); // Poll every 500ms for smooth live candles
+        }, 500); // Poll every 500ms for smooth live candles
+    }
 
 
     // --- Backtrace functionality removed per user request, system runs purely live now ---
@@ -1042,19 +1046,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Wire up execution dock buttons
-    const execBlocks = document.querySelectorAll('.execution-panel .exec-block');
-    if (execBlocks.length >= 3) {
-        // CE Block
-        const buyCeBtn = execBlocks[0].querySelector('.buy-btn');
-        const sellCeBtn = execBlocks[0].querySelector('.sell-btn');
-        if (buyCeBtn) buyCeBtn.addEventListener('click', () => placeTrade('BUY', 'CE'));
-        if (sellCeBtn) sellCeBtn.addEventListener('click', () => placeTrade('SELL', 'CE'));
+    if (!window.IS_SIMULATION) {
+        const execBlocks = document.querySelectorAll('.execution-panel .exec-block');
+        if (execBlocks.length >= 3) {
+            // CE Block
+            const buyCeBtn = execBlocks[0].querySelector('.buy-btn');
+            const sellCeBtn = execBlocks[0].querySelector('.sell-btn');
+            if (buyCeBtn) buyCeBtn.addEventListener('click', () => placeTrade('BUY', 'CE'));
+            if (sellCeBtn) sellCeBtn.addEventListener('click', () => placeTrade('SELL', 'CE'));
 
-        // PE Block
-        const buyPeBtn = execBlocks[2].querySelector('.buy-btn');
-        const sellPeBtn = execBlocks[2].querySelector('.sell-btn');
-        if (buyPeBtn) buyPeBtn.addEventListener('click', () => placeTrade('BUY', 'PE'));
-        if (sellPeBtn) sellPeBtn.addEventListener('click', () => placeTrade('SELL', 'PE'));
+            // PE Block
+            const buyPeBtn = execBlocks[2].querySelector('.buy-btn');
+            const sellPeBtn = execBlocks[2].querySelector('.sell-btn');
+            if (buyPeBtn) buyPeBtn.addEventListener('click', () => placeTrade('BUY', 'PE'));
+            if (sellPeBtn) sellPeBtn.addEventListener('click', () => placeTrade('SELL', 'PE'));
+        }
     }
 
     // ─── Reference Box Chart Overlay Arrays ───
@@ -2017,8 +2023,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    pollLivePnL();
-    pnlPollInterval = setInterval(pollLivePnL, 1000);
+    if (!window.IS_SIMULATION) {
+        pollLivePnL();
+        pnlPollInterval = setInterval(pollLivePnL, 1000);
+    } else {
+        // Expose internal rendering functions for the simulation controller.
+        // These are scoped inside this IIFE so they must be explicitly surfaced.
+        window.updatePnLUI            = updatePnLUI;
+        window.updateReferenceBoxesUI = updateReferenceBoxesUI;
+        window.updateBuySignalsUI     = updateBuySignalsUI;
+        window.updateExecutionsUI     = updateExecutionsUI;
+        window.drawReferenceBoxes     = drawReferenceBoxes;
+        window.drawVisualIndicators   = drawVisualIndicators;
+    }
 });
 
 /* ================================================================
@@ -2369,6 +2386,21 @@ function fmtTime(ts) {
         return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     } catch { return ts; }
 }
+
+/* ── Export monitoring functions for simulation reuse ── */
+window.drawReferenceBoxes = drawReferenceBoxes;
+window.updateReferenceBoxesUI = updateReferenceBoxesUI;
+window.updateBuySignalsUI = updateBuySignalsUI;
+window.updateExecutionsUI = updateExecutionsUI;
+window.drawVisualIndicators = drawVisualIndicators;
+window.updateConfirmationTimelineUI = updateConfirmationTimelineUI;
+window.updatePnLUI = updatePnLUI;
+window.handleManualExit = handleManualExit;
+window.pollLivePnL = pollLivePnL;
+window.syncActiveSymbols = function(data) {
+    if (data.call && data.call.symbol) activeCeSymbol = data.call.symbol;
+    if (data.put && data.put.symbol) activePeSymbol = data.put.symbol;
+};
 
 /* ── Hook into existing trade events for in-app notifications ── */
 // Override showToast to also push to notification list

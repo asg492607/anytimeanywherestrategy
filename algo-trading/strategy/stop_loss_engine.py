@@ -13,15 +13,16 @@ STOP_LOSS_CONFIG = {
     'retry_delay_seconds': 2
 }
 
-def monitor_running_trades(user_id, candles_dict):
+def monitor_running_trades(user_id, candles_dict, db_adapter=None, execute_adapter=None):
     """
     Monitors all active RUNNING trades. Evaluates latest candle closes
     against reference box lower boundaries to trigger automatic Stop Loss exits.
     """
+    db_local = db_adapter or db
     if not STOP_LOSS_CONFIG['enabled']:
         return
 
-    running_trades = db.get_running_trades(user_id)
+    running_trades = db_local.get_running_trades(user_id)
     if not running_trades:
         return
 
@@ -29,20 +30,20 @@ def monitor_running_trades(user_id, candles_dict):
         trade_id = trade['id']
         
         # 1. Fetch active Reference Box for this trade
-        box = db.get_reference_box_for_trade(user_id, trade_id)
+        box = db_local.get_reference_box_for_trade(user_id, trade_id)
         if not box:
             logger.warning(f"Stop Loss monitor: Could not resolve Reference Box for Trade ID {trade_id}")
             continue
 
         # 2. Ensure a Stop Loss Event record exists in MONITORING state
-        sl_event = db.get_stop_loss_by_trade_id(user_id, trade_id)
+        sl_event = db_local.get_stop_loss_by_trade_id(user_id, trade_id)
         calculated_sl = box['lower_boundary'] - STOP_LOSS_CONFIG['points_offset']
         
-        exec_record = db.get_execution_for_trade(user_id, trade_id)
+        exec_record = db_local.get_execution_for_trade(user_id, trade_id)
         exec_id = exec_record['id'] if exec_record else None
 
         if not sl_event:
-            event_id = db.save_stop_loss_event(
+            event_id = db_local.save_stop_loss_event(
                 user_id=user_id,
                 trade_id=trade_id,
                 execution_id=exec_id,
@@ -64,7 +65,7 @@ def monitor_running_trades(user_id, candles_dict):
                 exit_reason='Active Stop Loss Monitoring'
             )
             logger.info(f"Stop Loss Monitoring Started: Created Event ID {event_id} for Trade ID {trade_id}")
-            sl_event = db.get_stop_loss_by_trade_id(user_id, trade_id)
+            sl_event = db_local.get_stop_loss_by_trade_id(user_id, trade_id)
 
         # Skip if stop loss monitoring is already complete, triggered, or inactive
         if sl_event['exit_status'] not in ['MONITORING', 'FAILED', 'REJECTED']:
@@ -91,7 +92,7 @@ def monitor_running_trades(user_id, candles_dict):
             logger.info(f"Stop Loss Triggered: Candle low {latest_candle['low']} hit {calculated_sl} (3 points below box {box['lower_boundary']}) for Trade ID {trade_id}")
             
             # Save trigger candle parameters
-            db.save_stop_loss_event(
+            db_local.save_stop_loss_event(
                 user_id=user_id,
                 trade_id=trade_id,
                 execution_id=exec_id,
@@ -114,11 +115,13 @@ def monitor_running_trades(user_id, candles_dict):
             )
             
             # Execute Exit order
-            execute_stop_loss_exit(user_id, trade, sl_event['id'], calculated_sl, latest_candle)
+            execute_stop_loss_exit(user_id, trade, sl_event['id'], calculated_sl, latest_candle, db_adapter=db_local, execute_adapter=execute_adapter)
 
-def execute_stop_loss_exit(user_id, trade, sl_id, stop_loss_price, trigger_candle):
+def execute_stop_loss_exit(user_id, trade, sl_id, stop_loss_price, trigger_candle, db_adapter=None, execute_adapter=None):
     """Places exit MARKET order with retries."""
-    db.update_stop_loss_status(user_id, sl_id, 'ORDER_SUBMITTED')
+    db_local = db_adapter or db
+    execute_local = execute_adapter or execute_order_api
+    db_local.update_stop_loss_status(user_id, sl_id, 'ORDER_SUBMITTED')
     
     symbol = trade['call_symbol'] or trade['put_symbol']
     # Resolve token
@@ -155,7 +158,7 @@ def execute_stop_loss_exit(user_id, trade, sl_id, stop_loss_price, trigger_candl
         logger.info(f"Submitting Stop Loss Exit (Attempt {attempt}/{max_attempts}) for Trade ID {trade['id']}")
         
         # Place exit order
-        res = execute_order_api(params)
+        res = execute_local(params)
         
         if res['status']:
             broker_order_id = res['broker_order_id']
@@ -170,12 +173,13 @@ def execute_stop_loss_exit(user_id, trade, sl_id, stop_loss_price, trigger_candl
                     trade_id=trade['id'],
                     sl_id=sl_id,
                     exit_price=fill_price,
-                    broker_order_id=broker_order_id
+                    broker_order_id=broker_order_id,
+                    db_adapter=db_local
                 )
                 return
             elif is_filled is False:
                 # Explicit broker rejection - do NOT retry
-                db.update_stop_loss_status(
+                db_local.update_stop_loss_status(
                     user_id=user_id,
                     sl_id=sl_id,
                     status='REJECTED',
@@ -185,7 +189,7 @@ def execute_stop_loss_exit(user_id, trade, sl_id, stop_loss_price, trigger_candl
                 return
             else:
                 # Still open/pending
-                db.update_stop_loss_status(
+                db_local.update_stop_loss_status(
                     user_id=user_id,
                     sl_id=sl_id,
                     status='ORDER_SUBMITTED',
@@ -197,7 +201,7 @@ def execute_stop_loss_exit(user_id, trade, sl_id, stop_loss_price, trigger_candl
             if attempt < max_attempts:
                 time.sleep(delay)
             else:
-                db.update_stop_loss_status(
+                db_local.update_stop_loss_status(
                     user_id=user_id,
                     sl_id=sl_id,
                     status='FAILED',
@@ -241,7 +245,8 @@ def execute_order_api(params):
 
 def verify_exit_order(broker_order_id, requested_price):
     """Checks filled status of the exit order."""
-
+    if broker_order_id and str(broker_order_id).startswith("SIM_"):
+        return True, requested_price, None
 
     try:
         from data_engine import smartApi
@@ -264,10 +269,11 @@ def verify_exit_order(broker_order_id, requested_price):
 
     return False, None, "OpenAPI order book query error or session invalid"
 
-def update_trade_after_sl(user_id, trade_id, sl_id, exit_price, broker_order_id):
+def update_trade_after_sl(user_id, trade_id, sl_id, exit_price, broker_order_id, db_adapter=None):
     """Updates trade table entry and logs exit audit events."""
+    db_local = db_adapter or db
     # Fetch trade details
-    trade = db.get_trade_by_id(user_id, trade_id)
+    trade = db_local.get_trade_by_id(user_id, trade_id)
     if not trade:
         return
 
@@ -275,7 +281,7 @@ def update_trade_after_sl(user_id, trade_id, sl_id, exit_price, broker_order_id)
     pnl = (exit_price - trade['entry_price']) * trade['quantity']
 
     # Update trade in database
-    conn = db.get_db_connection()
+    conn = db_local.get_db_connection()
     try:
         cursor = conn.cursor()
         exit_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -299,7 +305,7 @@ def update_trade_after_sl(user_id, trade_id, sl_id, exit_price, broker_order_id)
         conn.close()
 
     # 3. Update Stop Loss Event status to ORDER_COMPLETE
-    db.update_stop_loss_status(
+    db_local.update_stop_loss_status(
         user_id=user_id,
         sl_id=sl_id,
         status='ORDER_COMPLETE',
@@ -322,37 +328,41 @@ def parse_local_time(str_val):
 
 # ─── Required Strategy Functions Wrappers ───
 
-def monitor_reference_box(user_id, trade_id):
+def monitor_reference_box(user_id, trade_id, db_adapter=None):
     """Wraps db.get_reference_box_for_trade."""
-    return db.get_reference_box_for_trade(user_id, trade_id)
+    db_local = db_adapter or db
+    return db_local.get_reference_box_for_trade(user_id, trade_id)
 
 def calculate_stop_loss(lower_boundary):
     """Calculates stop loss offset level."""
     return lower_boundary - STOP_LOSS_CONFIG['points_offset']
 
-def validate_stop_loss(user_id, trade_id):
+def validate_stop_loss(user_id, trade_id, db_adapter=None):
     """Verifies that the trade exists and is running."""
-    trade = db.get_trade_by_id(user_id, trade_id)
+    db_local = db_adapter or db
+    trade = db_local.get_trade_by_id(user_id, trade_id)
     return trade is not None and trade['status'] == 'RUNNING'
 
-def execute_stop_loss(user_id, trade_id):
+def execute_stop_loss(user_id, trade_id, db_adapter=None, execute_adapter=None):
     """Manually forces a stop-loss exit trigger for the trade."""
-    trade = db.get_trade_by_id(user_id, trade_id)
+    db_local = db_adapter or db
+    trade = db_local.get_trade_by_id(user_id, trade_id)
     if not trade or trade['status'] != 'RUNNING':
         return False, "Trade is not running"
 
-    sl_event = db.get_stop_loss_by_trade_id(user_id, trade_id)
+    sl_event = db_local.get_stop_loss_by_trade_id(user_id, trade_id)
     if not sl_event:
         return False, "Stop Loss monitoring event not initialized"
 
     logger.info(f"Manual Stop Loss Triggered: Trade ID {trade_id}")
     latest_candle = {'close': 0.0, 'open': 0.0, 'high': 0.0, 'low': 0.0}
-    execute_stop_loss_exit(user_id, trade, sl_event['id'], sl_event['calculated_stop_loss'], latest_candle)
+    execute_stop_loss_exit(user_id, trade, sl_event['id'], sl_event['calculated_stop_loss'], latest_candle, db_adapter=db_local, execute_adapter=execute_adapter)
     return True, "Manual Stop Loss Exit Complete"
 
-def retry_exit_order(user_id, sl_event_id):
+def retry_exit_order(user_id, sl_event_id, db_adapter=None, execute_adapter=None):
     """Retries a failed exit order."""
-    conn = db.get_db_connection()
+    db_local = db_adapter or db
+    conn = db_local.get_db_connection()
     try:
         row = conn.execute("SELECT * FROM stop_loss_events WHERE id = ? AND user_id = ?", (sl_event_id, user_id)).fetchone()
         if not row:
@@ -364,21 +374,22 @@ def retry_exit_order(user_id, sl_event_id):
     if event['exit_status'] not in ['FAILED', 'REJECTED']:
         return False, "Exit event is not in a retryable status"
 
-    trade = db.get_trade_by_id(user_id, event['trade_id'])
+    trade = db_local.get_trade_by_id(user_id, event['trade_id'])
     if not trade or trade['status'] != 'RUNNING':
         return False, "Associated trade is not running"
 
     logger.info(f"Manual Exit Retry Initiated: Event ID {sl_event_id}")
     latest_candle = {'close': 0.0, 'open': 0.0, 'high': 0.0, 'low': 0.0}
-    execute_stop_loss_exit(user_id, trade, sl_event_id, event['calculated_stop_loss'], latest_candle)
+    execute_stop_loss_exit(user_id, trade, sl_event_id, event['calculated_stop_loss'], latest_candle, db_adapter=db_local, execute_adapter=execute_adapter)
     return True, "Exit retry initiated"
 
-def expire_monitoring(user_id, trade_id):
+def expire_monitoring(user_id, trade_id, db_adapter=None):
     """Cancels active Stop Loss monitoring for a trade."""
-    sl_event = db.get_stop_loss_by_trade_id(user_id, trade_id)
+    db_local = db_adapter or db
+    sl_event = db_local.get_stop_loss_by_trade_id(user_id, trade_id)
     if not sl_event:
         return False, "Monitoring event not found"
 
-    db.update_stop_loss_status(user_id, sl_event['id'], 'CANCELLED', exit_reason='Monitoring manually cancelled')
+    db_local.update_stop_loss_status(user_id, sl_event['id'], 'CANCELLED', exit_reason='Monitoring manually cancelled')
     logger.info(f"Stop Loss Monitoring Cancelled: Trade ID {trade_id}")
     return True, "Monitoring cancelled"

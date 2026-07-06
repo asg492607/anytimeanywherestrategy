@@ -51,6 +51,11 @@ def dashboard():
         set_active_tokens(ce_symbol, pe_symbol)
     return render_template('dashboard.html', user=g.user)
 
+@app.route('/simulate')
+@login_required
+def simulate():
+    return render_template('simulate.html', user=g.user)
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     token = request.cookies.get("auth_token")
@@ -427,6 +432,39 @@ def get_data():
             app.logger.error(f"Error processing reference boxes/buy signals/confirmations/executions/stop_loss/targets/strategy_monitor during data update: {e}")
             
     return jsonify(data)
+
+@app.route('/api/simulate/start', methods=['POST'])
+@login_required
+def simulate_start():
+    payload = request.json or {}
+    date_str = payload.get('date', datetime.date.today().strftime('%Y-%m-%d'))
+    ce_symbol = payload.get('ce_symbol')
+    pe_symbol = payload.get('pe_symbol')
+    
+    from simulate_engine import start_simulation
+    res = start_simulation(g.user['id'], date_str, ce_symbol, pe_symbol)
+    return jsonify(res)
+
+@app.route('/api/simulate/stop', methods=['POST'])
+@login_required
+def simulate_stop():
+    from simulate_engine import stop_simulation
+    res = stop_simulation(g.user['id'])
+    return jsonify(res)
+
+@app.route('/api/simulate/tick', methods=['POST'])
+@login_required
+def simulate_tick():
+    from simulate_engine import tick_simulation
+    res = tick_simulation(g.user['id'])
+    return jsonify(res)
+
+@app.route('/api/simulate/data')
+@login_required
+def simulate_data():
+    from simulate_engine import get_simulation_data
+    res = get_simulation_data(g.user['id'])
+    return jsonify(res)
 
 @app.route('/api/search')
 @login_required
@@ -1233,5 +1271,5 @@ def get_monthly_report_api():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=True)
 

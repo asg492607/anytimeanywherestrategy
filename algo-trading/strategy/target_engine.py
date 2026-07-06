@@ -30,31 +30,32 @@ TARGET_LEVEL_KEYS = {
     }
 }
 
-def monitor_running_trades(user_id, candles_dict, db_data=None):
+def monitor_running_trades(user_id, candles_dict, db_data=None, db_adapter=None, execute_adapter=None):
     """Monitors all RUNNING trades for target hit events on CE, SENSEX, or PE charts."""
+    db_local = db_adapter or db
     if not TARGET_CONFIG['enabled']:
         return
 
-    running_trades = db.get_running_trades(user_id)
+    running_trades = db_local.get_running_trades(user_id)
     if not running_trades:
         return
 
     # Cache active boxes to evaluate each chart's dynamic levels
-    active_boxes = db.get_active_boxes(user_id)
+    active_boxes = db_local.get_active_boxes(user_id)
     boxes_by_chart = {b['chart_type']: b for b in active_boxes}
 
     for trade in running_trades:
         trade_id = trade['id']
         
-        exec_record = db.get_execution_for_trade(user_id, trade_id)
+        exec_record = db_local.get_execution_for_trade(user_id, trade_id)
         exec_id = exec_record['id'] if exec_record else None
         confirmation_id = exec_record['confirmation_id'] if exec_record else None
 
-        target_event = db.get_target_exit_by_trade_id(user_id, trade_id)
+        target_event = db_local.get_target_exit_by_trade_id(user_id, trade_id)
 
         if not target_event:
             # Initialize target event with placeholder values for ANY level monitoring
-            event_id = db.save_target_exit_event(
+            event_id = db_local.save_target_exit_event(
                 user_id=user_id,
                 trade_id=trade_id,
                 execution_id=exec_id,
@@ -77,7 +78,7 @@ def monitor_running_trades(user_id, candles_dict, db_data=None):
                 exit_reason='Active Target Monitoring'
             )
             logger.info(f"Target Monitoring Started: Created Event ID {event_id} for Trade ID {trade_id}")
-            target_event = db.get_target_exit_by_trade_id(user_id, trade_id)
+            target_event = db_local.get_target_exit_by_trade_id(user_id, trade_id)
 
         # Skip if target is already complete or canceled
         if target_event['exit_status'] not in ['MONITORING', 'FAILED', 'REJECTED']:
@@ -119,7 +120,7 @@ def monitor_running_trades(user_id, candles_dict, db_data=None):
                 if is_hit:
                     logger.info(f"Target {level_name} Hit Triggered on chart {check_chart} (price={latest_candle['close']} vs target={chart_tgt_price})")
                     
-                    db.save_target_exit_event(
+                    db_local.save_target_exit_event(
                         user_id=user_id,
                         trade_id=trade_id,
                         execution_id=exec_id,
@@ -142,8 +143,8 @@ def monitor_running_trades(user_id, candles_dict, db_data=None):
                         exit_reason=f"Target level {level_name} crossed on {check_chart} chart"
                     )
                     
-                    target_event = db.get_target_exit_by_trade_id(user_id, trade_id) # Reload for updated ID/price
-                    execute_target_exit(user_id, trade, target_event['id'], chart_tgt_price, latest_candle, check_chart)
+                    target_event = db_local.get_target_exit_by_trade_id(user_id, trade_id) # Reload for updated ID/price
+                    execute_target_exit(user_id, trade, target_event['id'], chart_tgt_price, latest_candle, check_chart, db_adapter=db_local, execute_adapter=execute_adapter)
                     target_hit_detected = True
                     break
             
@@ -190,9 +191,11 @@ def get_levels_for_chart(chart_type, db_data=None):
     levels, high, low, start, end = result
     return levels
 
-def execute_target_exit(user_id, trade, target_id, target_price, trigger_candle, chart_type):
+def execute_target_exit(user_id, trade, target_id, target_price, trigger_candle, chart_type, db_adapter=None, execute_adapter=None):
     """Places MARKET exit SELL order with retry handlers."""
-    db.update_target_exit_status(user_id, target_id, 'ORDER_SUBMITTED')
+    db_local = db_adapter or db
+    execute_local = execute_adapter or execute_order_api
+    db_local.update_target_exit_status(user_id, target_id, 'ORDER_SUBMITTED')
 
     symbol = trade['call_symbol'] or trade['put_symbol']
     # Resolve token
@@ -230,7 +233,7 @@ def execute_target_exit(user_id, trade, target_id, target_price, trigger_candle,
     for attempt in range(1, max_attempts + 1):
         logger.info(f"Submitting Target Exit (Attempt {attempt}/{max_attempts}) for Trade ID {trade['id']}")
         
-        res = execute_order_api(params)
+        res = execute_local(params)
         
         if res['status']:
             broker_order_id = res['broker_order_id']
@@ -246,12 +249,13 @@ def execute_target_exit(user_id, trade, target_id, target_price, trigger_candle,
                     exit_price=fill_price,
                     broker_order_id=broker_order_id,
                     target_level=TARGET_CONFIG['default_target_level'],
-                    target_price=target_price
+                    target_price=target_price,
+                    db_adapter=db_local
                 )
                 return
             elif is_filled is False:
                 # Rejected
-                db.update_target_exit_status(
+                db_local.update_target_exit_status(
                     user_id=user_id,
                     target_id=target_id,
                     status='REJECTED',
@@ -261,7 +265,7 @@ def execute_target_exit(user_id, trade, target_id, target_price, trigger_candle,
                 return
             else:
                 # Pending
-                db.update_target_exit_status(
+                db_local.update_target_exit_status(
                     user_id=user_id,
                     target_id=target_id,
                     status='ORDER_SUBMITTED',
@@ -273,7 +277,7 @@ def execute_target_exit(user_id, trade, target_id, target_price, trigger_candle,
             if attempt < max_attempts:
                 time.sleep(delay)
             else:
-                db.update_target_exit_status(
+                db_local.update_target_exit_status(
                     user_id=user_id,
                     target_id=target_id,
                     status='FAILED',
@@ -317,6 +321,8 @@ def execute_order_api(params):
 
 def verify_exit_order(broker_order_id, requested_price):
     """Verifies completion fill status of exit order."""
+    if broker_order_id and str(broker_order_id).startswith("SIM_"):
+        return True, requested_price, None
 
     try:
         from data_engine import smartApi
@@ -340,15 +346,16 @@ def verify_exit_order(broker_order_id, requested_price):
     return False, None, "OpenAPI order book query error or session invalid"
 
 def update_trade_after_target(user_id, trade_id, target_id, exit_price, broker_order_id, 
-                              target_level, target_price):
+                              target_level, target_price, db_adapter=None):
     """Updates active trades to TARGET_HIT status and logs profit exit events."""
-    trade = db.get_trade_by_id(user_id, trade_id)
+    db_local = db_adapter or db
+    trade = db_local.get_trade_by_id(user_id, trade_id)
     if not trade:
         return
 
     pnl = (exit_price - trade['entry_price']) * trade['quantity']
 
-    conn = db.get_db_connection()
+    conn = db_local.get_db_connection()
     try:
         cursor = conn.cursor()
         exit_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -372,7 +379,7 @@ def update_trade_after_target(user_id, trade_id, target_id, exit_price, broker_o
         conn.close()
 
     # 3. Update target_exit_events table to ORDER_COMPLETE
-    db.update_target_exit_status(
+    db_local.update_target_exit_status(
         user_id=user_id,
         target_id=target_id,
         status='ORDER_COMPLETE',
@@ -395,18 +402,21 @@ def parse_local_time(str_val):
 
 # ─── Required Strategy Functions Wrappers ───
 
-def monitor_targets(user_id, trade_id):
+def monitor_targets(user_id, trade_id, db_adapter=None):
     """Retrieves the target event details."""
-    return db.get_target_exit_by_trade_id(user_id, trade_id)
+    db_local = db_adapter or db
+    return db_local.get_target_exit_by_trade_id(user_id, trade_id)
 
-def validate_target(user_id, trade_id):
+def validate_target(user_id, trade_id, db_adapter=None):
     """Verifies that the trade is running."""
-    trade = db.get_trade_by_id(user_id, trade_id)
+    db_local = db_adapter or db
+    trade = db_local.get_trade_by_id(user_id, trade_id)
     return trade is not None and trade['status'] == 'RUNNING'
 
-def retry_target_exit(user_id, target_event_id):
+def retry_target_exit(user_id, target_event_id, db_adapter=None, execute_adapter=None):
     """Retries a failed exit order."""
-    conn = db.get_db_connection()
+    db_local = db_adapter or db
+    conn = db_local.get_db_connection()
     try:
         row = conn.execute("SELECT * FROM target_exit_events WHERE id = ? AND user_id = ?", (target_event_id, user_id)).fetchone()
         if not row:
@@ -418,21 +428,22 @@ def retry_target_exit(user_id, target_event_id):
     if event['exit_status'] not in ['FAILED', 'REJECTED']:
         return False, "Exit event is not in a retryable status"
 
-    trade = db.get_trade_by_id(user_id, event['trade_id'])
+    trade = db_local.get_trade_by_id(user_id, event['trade_id'])
     if not trade or trade['status'] != 'RUNNING':
         return False, "Associated trade is not running"
 
     logger.info(f"Manual Target Exit Retry Initiated: Event ID {target_event_id}")
     latest_candle = {'close': 0.0, 'open': 0.0, 'high': 0.0, 'low': 0.0}
-    execute_target_exit(user_id, trade, target_event_id, event['target_price'], latest_candle, event['chart_type'])
+    execute_target_exit(user_id, trade, target_event_id, event['target_price'], latest_candle, event['chart_type'], db_adapter=db_local, execute_adapter=execute_adapter)
     return True, "Exit retry initiated"
 
-def stop_monitoring(user_id, trade_id):
+def stop_monitoring(user_id, trade_id, db_adapter=None):
     """Cancels target monitoring for a trade."""
-    target_event = db.get_target_exit_by_trade_id(user_id, trade_id)
+    db_local = db_adapter or db
+    target_event = db_local.get_target_exit_by_trade_id(user_id, trade_id)
     if not target_event:
         return False, "Monitoring event not found"
 
-    db.update_target_exit_status(user_id, target_event['id'], 'CANCELLED', exit_reason='Monitoring manually cancelled')
+    db_local.update_target_exit_status(user_id, target_event['id'], 'CANCELLED', exit_reason='Monitoring manually cancelled')
     logger.info(f"Target Monitoring Cancelled: Trade ID {trade_id}")
     return True, "Monitoring cancelled"

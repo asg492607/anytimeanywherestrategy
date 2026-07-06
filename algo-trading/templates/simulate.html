@@ -3,13 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Option Co-Movement Analysis Dashboard</title>
+    <title>Simulation – Option Co-Movement Analysis Dashboard</title>
     <!-- Lightweight Charts for trading views (Locked to v4.1.1) -->
     <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=1.5">
     <script>
         // Protective stubs to catch early UI clicks before main.js is fully downloaded and parsed.
-        // Once main.js executes, these global definitions will be naturally overwritten.
         function toggleMonitorDrawer(tab) {
             console.warn("App is still loading...");
             showLoadingToast();
@@ -25,13 +24,105 @@
             if (window.showToast) {
                 window.showToast('⏳ System is still loading, please wait...', 'buy');
             } else {
-                alert('⏳ System is still loading, please wait a moment for the connection to establish.');
+                alert('⏳ System is still loading, please wait a moment.');
             }
         }
+        // Set simulation flag BEFORE main.js loads so it can skip live polling init
+        window.IS_SIMULATION = true;
     </script>
+    <style>
+        /* ── Simulation control bar ──────────────────────────────────────── */
+        #sim-control-bar {
+            background: #fff3e0;
+            border-bottom: 2px solid #ff9800;
+            padding: 8px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            flex-shrink: 0;
+        }
+        #sim-control-bar .sim-mode-badge {
+            background: #ff9800;
+            color: #000;
+            font-weight: 800;
+            font-size: 11px;
+            padding: 3px 9px;
+            border-radius: 4px;
+            letter-spacing: 0.8px;
+            white-space: nowrap;
+        }
+        #sim-control-bar input[type="date"] {
+            border: 1px solid #e0e3eb;
+            border-radius: 4px;
+            padding: 5px 8px;
+            font-size: 13px;
+            font-family: 'Inter', sans-serif;
+            background: #fff;
+            color: #131722;
+        }
+        #sim-control-bar .sc-btn {
+            background: #ffffff;
+            border: 1px solid #e0e3eb;
+            color: #131722;
+            padding: 5px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+            transition: background 0.15s ease;
+        }
+        #sim-control-bar .sc-btn:hover { background: #f8f9fa; }
+        #sim-control-bar .sc-btn.primary {
+            background: #ff9800;
+            color: #000;
+            border-color: #ff9800;
+            font-weight: 700;
+        }
+        #sim-control-bar .sc-btn.primary:hover { background: #e68900; }
+        #sim-control-bar .sc-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        #sim-control-bar select {
+            border: 1px solid #e0e3eb;
+            border-radius: 4px;
+            padding: 5px 8px;
+            font-size: 13px;
+            font-family: 'Inter', sans-serif;
+            background: #fff;
+            color: #131722;
+        }
+        #sim-progress-bar {
+            flex: 1;
+            min-width: 80px;
+            height: 6px;
+            background: #e0e3eb;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        #sim-progress-fill {
+            height: 100%;
+            background: #ff9800;
+            width: 0%;
+            transition: width 0.2s ease;
+        }
+        #sim-time-lbl {
+            font-weight: 600;
+            color: #131722;
+            white-space: nowrap;
+        }
+        #sim-status-lbl {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: #787b86;
+            white-space: nowrap;
+        }
+        .sep { color: #e0e3eb; }
+    </style>
 </head>
 <body>
-    <!-- STRATEGY SIGNAL BANNER -->
+    <!-- STRATEGY SIGNAL BANNER (identical to dashboard) -->
     <div id="strategy-banner" class="strategy-banner hidden">
         <div class="banner-content">
             <span class="pulse-dot"></span>
@@ -44,6 +135,37 @@
             <span>TARGET: <strong id="banner-tp"></strong></span>
         </div>
     </div>
+
+    <!-- ══ SIMULATION CONTROL BAR (only thing different from dashboard) ══ -->
+    <div id="sim-control-bar">
+        <span class="sim-mode-badge">⬛ SIMULATION MODE</span>
+        <span class="sep">|</span>
+        <input type="date" id="sim-date-input">
+        <button id="btn-start" class="sc-btn primary">🚀 Start</button>
+        <button id="btn-play"    class="sc-btn" disabled>▶ Play</button>
+        <button id="btn-pause"   class="sc-btn" disabled>⏸ Pause</button>
+        <button id="btn-step"    class="sc-btn" disabled>⏭ Step</button>
+        <button id="btn-restart" class="sc-btn" disabled>🔄 Restart</button>
+        <button id="btn-stop"    class="sc-btn" disabled>⏹ Stop</button>
+        <span class="sep">|</span>
+        <label style="font-weight:500; color:#787b86;">Speed:</label>
+        <select id="sim-speed-select">
+            <option value="1x">1x</option>
+            <option value="2x">2x</option>
+            <option value="5x">5x</option>
+            <option value="10x">10x</option>
+            <option value="Instant">Instant</option>
+        </select>
+        <span class="sep">|</span>
+        <span id="sim-status-lbl">IDLE</span>
+        <span id="sim-time-lbl" style="margin-left:4px;">--:-- --</span>
+        <div id="sim-progress-bar"><div id="sim-progress-fill"></div></div>
+        <span id="sim-candle-lbl" style="color:#787b86; font-size:12px; white-space:nowrap;">0 / 125</span>
+        <span class="sep">|</span>
+        <a href="/dashboard" style="text-decoration:none; font-size:12px; color:#2962ff; font-weight:600;">← Back to Live</a>
+    </div>
+
+    <!-- ══ Everything below is pixel-identical to dashboard.html ══ -->
 
     <div class="top-nav" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; background: #ffffff; border-bottom: 1px solid #e0e3eb;">
         <div style="font-weight: 600; font-size: 16px; color: #131722;">Institutional Trading Terminal</div>
@@ -64,24 +186,23 @@
             </div>
             <!-- System Health Indicator -->
             <div style="display: flex; align-items: center; gap: 6px; background: #f8f9fa; border: 1px solid #e0e3eb; border-radius: 4px; padding: 4px 10px; cursor: pointer;" onclick="toggleMonitorDrawer('health')" title="System Health">
-                <span id="nav-health-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #089981; display: inline-block;"></span>
-                <span id="nav-health-lbl" style="font-size: 11px; font-weight: 600; color: #131722;">SYSTEM OK</span>
+                <span id="nav-health-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #ff9800; display: inline-block;"></span>
+                <span id="nav-health-lbl" style="font-size: 11px; font-weight: 600; color: #131722;">SIMULATION</span>
             </div>
             <button class="tv-btn" onclick="toggleMonitorDrawer('analytics')" style="font-size: 12px; padding: 4px 10px;">📊 Analytics</button>
             <div style="height: 20px; width: 1px; background: #e0e3eb;"></div>
             <span style="font-size: 13px; color: #787b86; font-weight: 500;">👤 {{ user.full_name }}</span>
             <a href="/profile" class="tv-btn" style="text-decoration: none; font-size: 13px; background: #f8f9fa; color: #131722; border: 1px solid #e0e3eb; border-radius: 4px; padding: 4px 12px; font-weight: 500; transition: all 0.2s;">Profile</a>
             <a href="/trades/history" class="tv-btn" style="text-decoration: none; font-size: 13px; background: #f8f9fa; color: #131722; border: 1px solid #e0e3eb; border-radius: 4px; padding: 4px 12px; font-weight: 500; transition: all 0.2s;">📜 Trades</a>
-            <a href="/simulate" class="tv-btn" style="text-decoration: none; font-size: 13px; background: #ff9800; color: white; border: none; border-radius: 4px; padding: 5px 12px; font-weight: 600; transition: all 0.2s;">📈 Simulate Market</a>
             <a href="/logout" class="tv-btn" style="text-decoration: none; font-size: 13px; background: #f23645; color: white; border: none; border-radius: 4px; padding: 5px 12px; font-weight: 600; transition: all 0.2s;">Log Out</a>
         </div>
     </div>
 
-    <!-- SYSTEM HEALTH STATUS STRIP RESTORED FOR AUTOMATION -->
+    <!-- SYSTEM HEALTH STATUS STRIP -->
     <div id="health-strip" style="display: none; background: #131722; color: #adb7c9; font-size: 11px; font-weight: 500; padding: 5px 20px; gap: 20px; align-items: center; justify-content: space-between; border-bottom: 1px solid #2a2e39;">
         <div style="display: flex; gap: 20px;">
-            <span>Broker: <strong id="hs-broker" style="color:#089981;">● CONNECTED</strong></span>
-            <span>WebSocket: <strong id="hs-ws" style="color:#089981;">● LIVE</strong></span>
+            <span>Broker: <strong id="hs-broker" style="color:#ff9800;">● SIMULATION</strong></span>
+            <span>WebSocket: <strong id="hs-ws" style="color:#ff9800;">● REPLAY</strong></span>
             <span>DB: <strong id="hs-db" style="color:#089981;">● HEALTHY</strong></span>
             <span>Cache: <strong id="hs-cache" style="color:#089981;">● WARM</strong></span>
         </div>
@@ -93,7 +214,7 @@
         </div>
     </div>
 
-    <!-- SUMMARY CARDS ROW -->
+    <!-- SUMMARY CARDS ROW (identical to dashboard) -->
     <div class="summary-cards-container" style="display: flex; gap: 15px; padding: 15px 20px; background: #ffffff; border-bottom: 1px solid #e0e3eb; flex-shrink: 0; overflow-x: auto;">
         <!-- Card 1: Running P&L -->
         <div class="summary-card" style="flex: 1; min-width: 140px; background: #f8f9fa; border: 1px solid #e0e3eb; border-radius: 8px; padding: 12px 16px;">
@@ -290,11 +411,11 @@
         </div>
     </div>
     
-    <!-- UNIFIED FLAT EXECUTION DOCK -->
+    <!-- UNIFIED FLAT EXECUTION DOCK (identical to dashboard, buttons are non-functional in sim) -->
     <div class="execution-panel">
         <div class="exec-block" style="flex: 1; display: flex; gap: 10px; justify-content: center;">
-            <button class="exec-btn buy-btn">BUY CALL<br><span style="font-size:10px;font-weight:normal;">Req. Margin: ₹---</span></button>
-            <button class="exec-btn sell-btn">SELL CALL<br><span style="font-size:10px;font-weight:normal;">Req. Margin: ₹---</span></button>
+            <button class="exec-btn buy-btn" disabled style="opacity:0.5; cursor:not-allowed;">BUY CALL<br><span style="font-size:10px;font-weight:normal;">Simulation Only</span></button>
+            <button class="exec-btn sell-btn" disabled style="opacity:0.5; cursor:not-allowed;">SELL CALL<br><span style="font-size:10px;font-weight:normal;">Simulation Only</span></button>
         </div>
         
         <div class="exec-block center-info" style="flex: 1; text-align: center; border-left: 1px solid #e0e3eb; border-right: 1px solid #e0e3eb; padding: 0 20px;">
@@ -303,14 +424,14 @@
         </div>
 
         <div class="exec-block" style="flex: 1; display: flex; gap: 10px; justify-content: center;">
-            <button class="exec-btn buy-btn" style="background:#089981;">BUY PUT<br><span style="font-size:10px;font-weight:normal;">Req. Margin: ₹---</span></button>
-            <button class="exec-btn sell-btn" style="background:#f23645;">SELL PUT<br><span style="font-size:10px;font-weight:normal;">Req. Margin: ₹---</span></button>
+            <button class="exec-btn buy-btn" disabled style="background:#089981; opacity:0.5; cursor:not-allowed;">BUY PUT<br><span style="font-size:10px;font-weight:normal;">Simulation Only</span></button>
+            <button class="exec-btn sell-btn" disabled style="background:#f23645; opacity:0.5; cursor:not-allowed;">SELL PUT<br><span style="font-size:10px;font-weight:normal;">Simulation Only</span></button>
         </div>
     </div>
     
     <div id="toast-container" style="position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px;"></div>
 
-    <!-- MONITORING SIDE DRAWER -->
+    <!-- MONITORING SIDE DRAWER (identical to dashboard) -->
     <div id="monitor-drawer" style="position: fixed; top: 0; right: -440px; width: 440px; height: 100vh; background: #1e222d; border-left: 1px solid #2a2e39; z-index: 5000; transition: right 0.3s ease; display: flex; flex-direction: column; box-shadow: -4px 0 20px rgba(0,0,0,0.4);">
         <!-- Drawer Header -->
         <div style="padding: 16px 20px; border-bottom: 1px solid #2a2e39; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
@@ -333,11 +454,11 @@
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px;">
                     <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 12px;">
                         <div style="font-size: 10px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 6px;">BROKER</div>
-                        <div id="dp-broker" style="font-size: 13px; font-weight: 700; color: #089981;">● Connected</div>
+                        <div id="dp-broker" style="font-size: 13px; font-weight: 700; color: #ff9800;">● Simulation</div>
                     </div>
                     <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 12px;">
                         <div style="font-size: 10px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 6px;">WEBSOCKET</div>
-                        <div id="dp-ws" style="font-size: 13px; font-weight: 700; color: #089981;">● Live</div>
+                        <div id="dp-ws" style="font-size: 13px; font-weight: 700; color: #ff9800;">● Replay</div>
                     </div>
                     <div style="background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 12px;">
                         <div style="font-size: 10px; color: #787b86; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 6px;">DATABASE</div>
@@ -411,11 +532,6 @@
                     <div style="display: flex; justify-content: space-between; margin-bottom: 6px;"><span style="font-size: 12px; color: #adb7c9;">Confirmation Rate</span><strong id="an-conf-rate" style="font-size: 12px; color: #d1d4dc;">0%</strong></div>
                     <div style="display: flex; justify-content: space-between; margin-bottom: 6px;"><span style="font-size: 12px; color: #adb7c9;">Target Hit %</span><strong id="an-tgt-pct" style="font-size: 12px; color: #089981;">0%</strong></div>
                     <div style="display: flex; justify-content: space-between;"><span style="font-size: 12px; color: #adb7c9;">Stop Loss %</span><strong id="an-sl-pct" style="font-size: 12px; color: #f23645;">0%</strong></div>
-                </div>
-                <div style="display: flex; gap: 8px;">
-                    <a href="/api/reports/daily?export=csv" style="flex: 1; text-align: center; background: #2a2e39; color: #d1d4dc; padding: 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-decoration: none;">📥 Daily CSV</a>
-                    <a href="/api/reports/weekly?export=csv" style="flex: 1; text-align: center; background: #2a2e39; color: #d1d4dc; padding: 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-decoration: none;">📥 Weekly CSV</a>
-                    <a href="/api/reports/monthly?export=csv" style="flex: 1; text-align: center; background: #2a2e39; color: #d1d4dc; padding: 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-decoration: none;">📥 Monthly CSV</a>
                 </div>
             </div>
 
@@ -512,7 +628,7 @@
     <!-- Drawer overlay -->
     <div id="drawer-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 4999;" onclick="closeMonitorDrawer()"></div>
 
-    <!-- Use a cache-busting query parameter for main.js to force browser to reload it -->
+    <!-- main.js (IS_SIMULATION flag is set above, so live polling is suppressed) -->
     <script src="{{ url_for('static', filename='js/main.js') }}?v=2.17"></script>
     <style>
         .toast {
@@ -538,5 +654,336 @@
         .toast.sell { border-left-color: #f23645; }
         #monitor-drawer.open { right: 0 !important; }
     </style>
+
+    <!-- ══ Simulation Controller ══ -->
+    <script>
+        // ─────────────────────────────────────────────────────────────────────
+        // Configurable replay speed constants (ms per sub-tick poll interval).
+        // A 3-minute candle has 180 seconds. We divide the candle duration by
+        // the number of sub-ticks (10) to determine how fast we update the chart.
+        // ─────────────────────────────────────────────────────────────────────
+        const CANDLE_DURATION_SECONDS = 180; // 3 minutes
+        const SUB_TICKS_PER_CANDLE = 10;     // intra-candle update resolution
+
+        const REPLAY_SPEED_MS = {
+            '1x':      (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 1000,  // 18000ms per sub-tick → full candle in 3min real time
+            '2x':      (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 500,   // 9000ms per sub-tick
+            '5x':      (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 200,   // 3600ms
+            '10x':     (CANDLE_DURATION_SECONDS / SUB_TICKS_PER_CANDLE) * 100,   // 1800ms
+            'Instant': 50                                                          // near-instant
+        };
+
+        // ─── State ────────────────────────────────────────────────────────────
+        let _simState = 'IDLE';          // IDLE | RUNNING | PAUSED | COMPLETED
+        let _subTickInterval = null;     // setInterval handle for intra-candle ticks
+        let _subTickIndex = 0;           // which sub-tick within current candle (0-9)
+        let _currentCandle = null;       // { SPOT, CALL, PUT } candle being streamed
+        let _nextCandle = null;          // pre-loaded next candle
+        let _simSession = null;          // data returned by /api/simulate/data
+
+        // ─── DOM references ───────────────────────────────────────────────────
+        const $ = id => document.getElementById(id);
+        const btnStart   = $('btn-start');
+        const btnPlay    = $('btn-play');
+        const btnPause   = $('btn-pause');
+        const btnStep    = $('btn-step');
+        const btnRestart = $('btn-restart');
+        const btnStop    = $('btn-stop');
+        const speedSel   = $('sim-speed-select');
+
+        // Default date to today
+        const today = new Date().toISOString().split('T')[0];
+        $('sim-date-input').value = today;
+
+        // ─── Button Wiring ────────────────────────────────────────────────────
+        btnStart.addEventListener('click', startSim);
+        btnPlay.addEventListener('click', playSim);
+        btnPause.addEventListener('click', pauseSim);
+        btnStep.addEventListener('click', manualStep);
+        btnRestart.addEventListener('click', () => { stopSim().then(startSim); });
+        btnStop.addEventListener('click', stopSim);
+        speedSel.addEventListener('change', () => {
+            // If already playing, restart interval with new speed
+            if (_simState === 'RUNNING') { clearInterval(_subTickInterval); scheduleSubTick(); }
+        });
+
+        // ─── Toast helper ─────────────────────────────────────────────────────
+        function simToast(msg, type = 'buy') {
+            if (window.showToast) window.showToast(msg, type);
+        }
+
+        // ─── Control panel state ──────────────────────────────────────────────
+        function setControlState(state) {
+            _simState = state;
+            const idle      = state === 'IDLE';
+            const running   = state === 'RUNNING';
+            const paused    = state === 'PAUSED';
+            const completed = state === 'COMPLETED';
+
+            btnStart.disabled   = !idle;
+            btnPlay.disabled    = !(paused || completed === false && idle === false && running === false);
+            btnPause.disabled   = !running;
+            btnStep.disabled    = !(paused);
+            btnRestart.disabled = idle;
+            btnStop.disabled    = idle;
+            $('sim-date-input').disabled = !idle;
+
+            // Status label
+            const lbl = $('sim-status-lbl');
+            const colors = { IDLE: '#787b86', RUNNING: '#089981', PAUSED: '#ff9800', COMPLETED: '#2962ff' };
+            lbl.textContent = state;
+            lbl.style.color = colors[state] || '#787b86';
+        }
+
+        function updateTimeline(data) {
+            if (!data) return;
+            const idx   = data.current_index || 0;
+            const total = data.total_candles || 125;
+            const pct   = Math.round((idx / total) * 100);
+
+            $('sim-progress-fill').style.width = pct + '%';
+            $('sim-candle-lbl').textContent = `${idx} / ${total}`;
+
+            // Show current candle time from SPOT
+            const candles = data.candles && data.candles.SPOT;
+            if (candles && candles.length > 0) {
+                const ts = candles[candles.length - 1].time;
+                const d = new Date(ts * 1000);
+                $('sim-time-lbl').textContent = d.toLocaleTimeString('en-IN', {
+                    timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true
+                });
+            }
+        }
+
+        // ─── 1. Start ─────────────────────────────────────────────────────────
+        async function startSim() {
+            const date = $('sim-date-input').value;
+            simToast(`🚀 Starting simulation for ${date}…`, 'buy');
+            setControlState('RUNNING');
+
+            try {
+                const r = await fetch('/api/simulate/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ date })
+                });
+                const res = await r.json();
+                if (res.error) { simToast('❌ ' + res.error, 'sell'); setControlState('IDLE'); return; }
+
+                // Fetch initial data to draw charts
+                await fetchSimData(true);
+                scheduleSubTick();
+            } catch(e) {
+                console.error(e);
+                simToast('❌ Network error', 'sell');
+                setControlState('IDLE');
+            }
+        }
+
+        // ─── 2. Play / Pause ─────────────────────────────────────────────────
+        function playSim() {
+            setControlState('RUNNING');
+            scheduleSubTick();
+        }
+        function pauseSim() {
+            clearInterval(_subTickInterval);
+            _subTickInterval = null;
+            setControlState('PAUSED');
+        }
+
+        // ─── 3. Manual step (single candle advance while paused) ─────────────
+        async function manualStep() {
+            if (_simState !== 'PAUSED') return;
+            await serverTick();
+            await fetchSimData(false);
+        }
+
+        // ─── 4. Stop ─────────────────────────────────────────────────────────
+        async function stopSim() {
+            clearInterval(_subTickInterval);
+            _subTickInterval = null;
+            _subTickIndex = 0;
+            _currentCandle = null;
+            try { await fetch('/api/simulate/stop', { method: 'POST' }); } catch(e) {}
+            setControlState('IDLE');
+            $('sim-time-lbl').textContent = '--:-- --';
+            $('sim-progress-fill').style.width = '0%';
+            $('sim-candle-lbl').textContent = '0 / 125';
+        }
+
+        // ─── 5. Intra-candle sub-tick scheduler ──────────────────────────────
+        // Each 3-minute candle is divided into SUB_TICKS_PER_CANDLE sub-ticks.
+        // On each sub-tick we interpolate an "in-progress" live candle and
+        // update the chart without advancing the backend.
+        // When the last sub-tick fires, we call serverTick() to close the candle
+        // and load the next one from the backend.
+        function scheduleSubTick() {
+            if (_subTickInterval) clearInterval(_subTickInterval);
+            const speed = speedSel.value;
+            const delay = REPLAY_SPEED_MS[speed] || REPLAY_SPEED_MS['1x'];
+            _subTickInterval = setInterval(onSubTick, delay);
+        }
+
+        async function onSubTick() {
+            if (_subTickIndex < SUB_TICKS_PER_CANDLE - 1) {
+                // Intermediate tick: stream partial candle to chart
+                _subTickIndex++;
+                streamPartialCandle();
+            } else {
+                // Final sub-tick for this candle: close it and advance
+                _subTickIndex = 0;
+                clearInterval(_subTickInterval);
+                _subTickInterval = null;
+
+                const res = await serverTick();
+                if (res && res.status === 'COMPLETED') {
+                    await fetchSimData(false);
+                    setControlState('COMPLETED');
+                    simToast('🏁 Simulation day complete!', 'buy');
+                    return;
+                }
+                await fetchSimData(false);
+                if (_simState === 'RUNNING') scheduleSubTick();
+            }
+        }
+
+        // ─── 6. Stream a partial (live-building) candle to charts ────────────
+        // Uses the *next* candle's OHLCV data and interpolates progress.
+        function streamPartialCandle() {
+            if (!_simSession || !_simSession.candles) return;
+            const progress = _subTickIndex / SUB_TICKS_PER_CANDLE; // 0.1 to 0.9
+
+            ['SPOT', 'CALL', 'PUT'].forEach((key, chartIdx) => {
+                const allCandles = _simSession.candles[key];
+                if (!allCandles || allCandles.length < 1) return;
+
+                // The LAST candle in the already-committed slice is our base;
+                // we simulate its "live" progression toward the next candle's close.
+                const committed = allCandles[allCandles.length - 1];
+                const chartObj = window.activeCharts ? window.activeCharts[chartIdx] : null;
+                if (!chartObj || !chartObj.candleSeries) return;
+
+                // Interpolate close price between open and final close
+                const liveClose = committed.open + (committed.close - committed.open) * progress;
+                const liveHigh  = committed.open + (committed.high  - committed.open) * Math.min(progress * 1.3, 1);
+                const liveLow   = committed.open - (committed.open  - committed.low)  * Math.min(progress * 1.3, 1);
+
+                chartObj.candleSeries.update({
+                    time:   committed.time,
+                    open:   committed.open,
+                    high:   liveHigh,
+                    low:    liveLow,
+                    close:  liveClose,
+                    volume: Math.round(committed.volume * progress)
+                });
+            });
+        }
+
+        // ─── 7. Server-side tick (close the candle, run strategy pipeline) ───
+        async function serverTick() {
+            try {
+                const r = await fetch('/api/simulate/tick', { method: 'POST' });
+                return await r.json();
+            } catch(e) {
+                console.error('Tick error', e);
+                pauseSim();
+                return null;
+            }
+        }
+
+        // ─── 8. Fetch full simulation state and render ────────────────────────
+        async function fetchSimData(isInitial) {
+            try {
+                const r = await fetch('/api/simulate/data');
+                const data = await r.json();
+                if (data.status === 'IDLE') return;
+
+                _simSession = data;
+
+                // ── Charts (reuses renderDashboard from main.js exactly as live mode) ──
+                if (window.renderDashboard) {
+                    window.renderDashboard(data);
+                }
+
+                // ── Reference Boxes ──────────────────────────────────────────────────
+                if (window.updateReferenceBoxesUI && data.reference_boxes) {
+                    window.updateReferenceBoxesUI(data.reference_boxes);
+                }
+                if (window.drawReferenceBoxes && data.reference_boxes) {
+                    window.drawReferenceBoxes(data.reference_boxes);
+                }
+
+                // ── Buy Signals ──────────────────────────────────────────────────────
+                if (window.updateBuySignalsUI && data.buy_signals) {
+                    window.updateBuySignalsUI(data.buy_signals);
+                }
+
+                // ── Executions ───────────────────────────────────────────────────────
+                if (window.updateExecutionsUI && data.executions) {
+                    window.updateExecutionsUI(data.executions);
+                }
+
+                // ── Trades, P&L cards, Running Trades table (same call as pollLivePnL) ──
+                if (window.updatePnLUI && data.pnl_stats) {
+                    window.updatePnLUI(
+                        data.pnl_stats,
+                        data.running_trades || [],
+                        data.stop_loss_events || [],
+                        data.target_exit_events || []
+                    );
+                }
+
+                // ── Visual chart indicators (SL lines, target lines, signal marks) ──
+                if (window.drawVisualIndicators) {
+                    window.drawVisualIndicators(
+                        data.buy_signals || [],
+                        data.executions || [],
+                        data.stop_loss_events || [],
+                        data.stop_loss_history || []
+                    );
+                }
+
+                updateTimeline(data);
+            } catch(e) {
+                console.error('fetchSimData error', e);
+            }
+        }
+
+        // ─── 9. Update dock UI tables (boxes, signals, executions, trades) ───
+        // Calls into the same updateReferenceBoxesUI etc. from main.js if exposed.
+        function updateSimDockUI(data) {
+            // Reference Boxes
+            if (window.updateReferenceBoxesUI && data.reference_boxes) {
+                window.updateReferenceBoxesUI(data.reference_boxes);
+            }
+            // Buy Signals (mapped from active boxes with breakout_status)
+            if (window.updateBuySignalsUI && data.reference_boxes) {
+                const signals = data.reference_boxes.filter(b => b.breakout_status && b.breakout_status !== 'NONE');
+                window.updateBuySignalsUI(signals);
+            }
+            // Executions
+            if (window.updateExecutionsUI && data.executions) {
+                window.updateExecutionsUI(data.executions);
+            }
+            // Trades & PnL
+            if (data.statistics && data.trades) {
+                // Map sim stats to the shape updatePnLUI expects
+                const stats = {
+                    running_pnl: data.statistics.running_pnl || 0,
+                    closed_pnl: data.statistics.closed_pnl || 0,
+                    today_pnl: data.statistics.net_profit || 0,
+                    total_pnl: data.statistics.net_profit || 0,
+                    win_rate: data.statistics.win_rate || 0,
+                    total_trades: data.statistics.total_completed || 0,
+                    winning_trades: data.statistics.winning_trades || 0,
+                    losing_trades: data.statistics.losing_trades || 0,
+                };
+                const runningTrades = data.trades ? data.trades.filter(t => t.status === 'RUNNING') : [];
+                if (window.updatePnLUI) {
+                    window.updatePnLUI(stats, runningTrades, [], []);
+                }
+            }
+        }
+    </script>
 </body>
 </html>

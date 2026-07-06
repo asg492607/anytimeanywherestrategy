@@ -16,41 +16,42 @@ EXECUTION_CONFIG = {
     'retry_delay_seconds': 2
 }
 
-def monitor_confirmations(user_id):
+def monitor_confirmations(user_id, db_adapter=None, execute_adapter=None):
     """
     Scans for CONFIRMED sessions and triggers automatic trade execution
     through the Angel One SmartAPI (or simulated matching engine).
     """
+    db_local = db_adapter or db
     if not EXECUTION_CONFIG['enabled']:
         return
 
     # 1. Fetch completed historical sessions (which include CONFIRMED sessions)
-    history = db.get_confirmation_history(user_id)
+    history = db_local.get_confirmation_history(user_id)
     confirmed_sessions = [s for s in history if s['confirmation_status'] == 'CONFIRMED']
 
     for session in confirmed_sessions:
         # Avoid double execution on same session
-        if db.check_confirmation_executed(user_id, session['id']):
+        if db_local.check_confirmation_executed(user_id, session['id']):
             continue
 
         logger.info(f"Execution Triggered: Confirmation Session ID {session['id']} is ready for execution")
         
         # 2. Validate session rules
-        is_valid, reason = validate_confirmation(user_id, session)
+        is_valid, reason = validate_confirmation(user_id, session, db_adapter=db_local)
         if not is_valid:
             logger.warning(f"Execution Rejected: Confirmation ID {session['id']} validation failed: {reason}")
-            save_failed_execution(user_id, session, reason)
+            save_failed_execution(user_id, session, reason, db_adapter=db_local)
             continue
 
         # 3. Prepare order details
         order_params = prepare_order(user_id, session)
         if not order_params:
             logger.error(f"Execution Rejected: Could not prepare order params for Session ID {session['id']}")
-            save_failed_execution(user_id, session, "Failed to resolve instrument token")
+            save_failed_execution(user_id, session, "Failed to resolve instrument token", db_adapter=db_local)
             continue
 
         # 4. Save initial execution record in PENDING state
-        exec_id = db.save_trade_execution(
+        exec_id = db_local.save_trade_execution(
             user_id=user_id,
             confirmation_id=session['id'],
             trade_id=None,
@@ -75,12 +76,13 @@ def monitor_confirmations(user_id):
         logger.info(f"Execution Pending: ID {exec_id} recorded in DB")
 
         # 5. Submit order to broker with retry loops
-        execute_with_retry(user_id, exec_id, order_params, session)
+        execute_with_retry(user_id, exec_id, order_params, session, db_adapter=db_local, execute_adapter=execute_adapter)
 
-def validate_confirmation(user_id, session):
+def validate_confirmation(user_id, session, db_adapter=None):
     """
     Checks market status, user session status, and signal integrity constraints.
     """
+    db_local = db_adapter or db
     if not session or session['confirmation_status'] != 'CONFIRMED':
         return False, "Session not confirmed"
 
@@ -119,7 +121,7 @@ def validate_confirmation(user_id, session):
                 return False, f"Trade LTP ({breakout_price}) is outside allowed range (400 - 500)"
             
         # Check for active opposite trades
-        running_trades = db.get_running_trades(user_id)
+        running_trades = db_local.get_running_trades(user_id)
         new_trade_type = 'CE' if target_sig['chart_type'] == 'CALL' else 'PE'
         
         for trade in running_trades:
@@ -210,11 +212,14 @@ def calculate_order_quantity(breakout_price):
         return max(10, qty)
     return 10
 
-def execute_rule_signal(user_id, rule_id, action, symbol, price):
+def execute_rule_signal(user_id, rule_id, action, symbol, price, db_adapter=None, execute_adapter=None):
     """
     Directly executes a trade based on a confirmed Rule Engine signal.
     Bypasses the old multi-step confirmation state machine.
     """
+    db_local = db_adapter or db
+    execute_local = execute_adapter or execute_order
+    
     if not EXECUTION_CONFIG['enabled']:
         return
 
@@ -245,7 +250,7 @@ def execute_rule_signal(user_id, rule_id, action, symbol, price):
     }
 
     # 3. Double check for active opposite trades
-    running_trades = db.get_running_trades(user_id)
+    running_trades = db_local.get_running_trades(user_id)
     new_trade_type = 'CE' if "CE" in symbol else 'PE'
     for trade in running_trades:
         if new_trade_type == 'CE' and trade.get('put_symbol'):
@@ -257,7 +262,7 @@ def execute_rule_signal(user_id, rule_id, action, symbol, price):
 
     # 4. Submit Order
     logger.info(f"Submitting Order for Rule {rule_id}: {quantity} lots of {symbol}")
-    res = execute_order(params)
+    res = execute_local(params)
     
     if res['status']:
         broker_order_id = res['broker_order_id']
@@ -267,7 +272,7 @@ def execute_rule_signal(user_id, rule_id, action, symbol, price):
             # Create trade directly
             stop_loss = fill_price - 10.0
             target = fill_price + 20.0
-            trade_id = db.create_trade(
+            trade_id = db_local.create_trade(
                 user_id=user_id,
                 broker='angelone',
                 underlying='SENSEX',
@@ -330,7 +335,8 @@ def verify_order_status(broker_order_id, requested_price):
     Checks filled state of submitted broker order ID.
     Returns status tuple: (is_filled, price, reason)
     """
-
+    if broker_order_id and str(broker_order_id).startswith("SIM_"):
+        return True, requested_price, None
 
     try:
         from data_engine import smartApi
@@ -356,26 +362,28 @@ def verify_order_status(broker_order_id, requested_price):
 
     return False, None, "OpenAPI order book query error or session invalid"
 
-def execute_with_retry(user_id, exec_id, params, session):
+def execute_with_retry(user_id, exec_id, params, session, db_adapter=None, execute_adapter=None):
     """
     Executes order with retry loops for network/connectivity exceptions.
     """
+    db_local = db_adapter or db
+    execute_local = execute_adapter or execute_order
     # Double check for active opposite trades to prevent race conditions
-    running_trades = db.get_running_trades(user_id)
+    running_trades = db_local.get_running_trades(user_id)
     symbol = params['symbol']
     new_trade_type = 'CE' if "CE" in symbol else 'PE'
     
     for trade in running_trades:
         if new_trade_type == 'CE' and trade.get('put_symbol'):
-            db.update_execution_status(user_id, exec_id, 'REJECTED', rejection_reason="Opposite trade (PE) already running")
+            db_local.update_execution_status(user_id, exec_id, 'REJECTED', rejection_reason="Opposite trade (PE) already running")
             logger.warning(f"Execution Rejected (Race Condition Prev): Opposite trade (PE) already running for Execution ID {exec_id}")
             return
         if new_trade_type == 'PE' and trade.get('call_symbol'):
-            db.update_execution_status(user_id, exec_id, 'REJECTED', rejection_reason="Opposite trade (CE) already running")
+            db_local.update_execution_status(user_id, exec_id, 'REJECTED', rejection_reason="Opposite trade (CE) already running")
             logger.warning(f"Execution Rejected (Race Condition Prev): Opposite trade (CE) already running for Execution ID {exec_id}")
             return
 
-    db.update_execution_status(user_id, exec_id, 'SUBMITTED')
+    db_local.update_execution_status(user_id, exec_id, 'SUBMITTED')
     
     max_attempts = EXECUTION_CONFIG['max_retries']
     delay = EXECUTION_CONFIG['retry_delay_seconds']
@@ -384,7 +392,7 @@ def execute_with_retry(user_id, exec_id, params, session):
         logger.info(f"Submitting Order (Attempt {attempt}/{max_attempts}) for Execution ID {exec_id}")
         
         # Place order
-        res = execute_order(params)
+        res = execute_local(params)
         
         if res['status']:
             broker_order_id = res['broker_order_id']
@@ -394,11 +402,11 @@ def execute_with_retry(user_id, exec_id, params, session):
             
             if is_filled is True:
                 # Trade Executed Successfully! Create running trade record.
-                create_running_trade(user_id, exec_id, broker_order_id, fill_price, params, session)
+                create_running_trade(user_id, exec_id, broker_order_id, fill_price, params, session, db_adapter=db_local)
                 return
             elif is_filled is False:
                 # Order explicitly rejected by broker - do NOT retry
-                db.update_execution_status(
+                db_local.update_execution_status(
                     user_id=user_id,
                     exec_id=exec_id,
                     status='REJECTED',
@@ -409,7 +417,7 @@ def execute_with_retry(user_id, exec_id, params, session):
                 return
             else:
                 # Order is still pending in broker book, mark as SUBMITTED and log
-                db.update_execution_status(
+                db_local.update_execution_status(
                     user_id=user_id,
                     exec_id=exec_id,
                     status='SUBMITTED',
@@ -424,7 +432,7 @@ def execute_with_retry(user_id, exec_id, params, session):
                 time.sleep(delay)
             else:
                 # All retry attempts failed
-                db.update_execution_status(
+                db_local.update_execution_status(
                     user_id=user_id,
                     exec_id=exec_id,
                     status='FAILED',
@@ -432,11 +440,12 @@ def execute_with_retry(user_id, exec_id, params, session):
                 )
                 logger.error(f"Execution Failed: ID {exec_id} failed submission retry loops")
 
-def create_running_trade(user_id, exec_id, broker_order_id, executed_price, params, session):
+def create_running_trade(user_id, exec_id, broker_order_id, executed_price, params, session, db_adapter=None):
     """
     On successful order fill, initializes a running trade in the trades table
     and links it to the execution session.
     """
+    db_local = db_adapter or db
     # 1. Prepare trade parameters
     symbol = params['symbol']
     direction = params['transaction_type'] # BUY
@@ -450,7 +459,7 @@ def create_running_trade(user_id, exec_id, broker_order_id, executed_price, para
     target = executed_price + 20.0
 
     # 2. Insert trade into trades table (creates audit log automatically)
-    trade_id = db.create_trade(
+    trade_id = db_local.create_trade(
         user_id=user_id,
         broker='angelone',
         underlying='SENSEX',
@@ -469,7 +478,7 @@ def create_running_trade(user_id, exec_id, broker_order_id, executed_price, para
     import pytz
     ist = pytz.timezone('Asia/Kolkata')
     exec_time = datetime.now(ist).strftime('%Y-%m-%d %H:%M:%S')
-    db.update_execution_status(
+    db_local.update_execution_status(
         user_id=user_id,
         exec_id=exec_id,
         status='COMPLETE',
@@ -479,7 +488,7 @@ def create_running_trade(user_id, exec_id, broker_order_id, executed_price, para
     )
     
     # 4. Also update the execution time field directly in DB
-    conn = db.get_db_connection()
+    conn = db_local.get_db_connection()
     try:
         conn.execute("""
             UPDATE trade_executions SET execution_time = ?
@@ -491,9 +500,10 @@ def create_running_trade(user_id, exec_id, broker_order_id, executed_price, para
 
     logger.info(f"Trade Created: ID {trade_id} (RUNNING) linked to Execution ID {exec_id} (COMPLETE)")
 
-def save_failed_execution(user_id, session, reason):
+def save_failed_execution(user_id, session, reason, db_adapter=None):
     """Creates a failed execution log for auditing purposes."""
-    db.save_trade_execution(
+    db_local = db_adapter or db
+    db_local.save_trade_execution(
         user_id=user_id,
         confirmation_id=session['id'],
         trade_id=None,
@@ -517,9 +527,10 @@ def save_failed_execution(user_id, session, reason):
 
 # ─── Required Strategy Functions Wrappers ───
 
-def retry_execution(user_id, exec_id):
+def retry_execution(user_id, exec_id, db_adapter=None, execute_adapter=None):
     """Manually retries a failed trade execution."""
-    execution = db.get_execution_by_id(user_id, exec_id)
+    db_local = db_adapter or db
+    execution = db_local.get_execution_by_id(user_id, exec_id)
     if not execution or execution['execution_status'] not in ['FAILED', 'REJECTED']:
         return False, "Execution is not in a retryable state"
 
@@ -539,24 +550,26 @@ def retry_execution(user_id, exec_id):
     }
 
     # Fetch confirmation details
-    session = db.get_confirmation_by_id(user_id, execution['confirmation_id'])
+    session = db_local.get_confirmation_by_id(user_id, execution['confirmation_id'])
     if not session:
         return False, "Confirmation session not found"
 
     # Trigger order
     logger.info(f"Manual Retry Initiated: Execution ID {exec_id}")
-    execute_with_retry(user_id, exec_id, params, session)
+    execute_with_retry(user_id, exec_id, params, session, db_adapter=db_local, execute_adapter=execute_adapter)
     return True, "Retry process completed"
 
-def cancel_execution(user_id, exec_id):
+def cancel_execution(user_id, exec_id, db_adapter=None):
     """Updates status to CANCELLED representing cancellation of pending fills."""
-    db.update_execution_status(user_id, exec_id, 'CANCELLED')
+    db_local = db_adapter or db
+    db_local.update_execution_status(user_id, exec_id, 'CANCELLED')
     logger.info(f"Execution Cancelled: ID {exec_id} marked as CANCELLED")
     return True, "Execution cancelled successfully"
 
-def save_execution(user_id, exec_data):
+def save_execution(user_id, exec_data, db_adapter=None):
     """Directly wraps db.save_trade_execution."""
-    return db.save_trade_execution(
+    db_local = db_adapter or db
+    return db_local.save_trade_execution(
         user_id=user_id,
         confirmation_id=exec_data['confirmation_id'],
         trade_id=exec_data.get('trade_id'),

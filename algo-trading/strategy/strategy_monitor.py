@@ -11,23 +11,24 @@ except ImportError:
 
 logger = logging.getLogger('strategy_monitor')
 
-def monitor_strategy(user_id):
+def monitor_strategy(user_id, db_adapter=None):
     """Orchestrates strategy status sweeps, updates health metrics, and writes log events."""
+    db_local = db_adapter or db
     # 1. Resolve active strategy session
-    session = db.get_active_strategy_session(user_id, 'institutional')
+    session = db_local.get_active_strategy_session(user_id, 'institutional')
     if not session:
-        session_id = db.create_strategy_session(user_id, 'institutional')
+        session_id = db_local.create_strategy_session(user_id, 'institutional')
         logger.info(f"Initialized new Strategy session: ID {session_id}")
-        session = db.get_active_strategy_session(user_id, 'institutional')
+        session = db_local.get_active_strategy_session(user_id, 'institutional')
 
     session_id = session['id']
 
     # 2. Gather strategy status metrics
-    trades, total_trades_count = db.get_all_trades(user_id)
+    trades, total_trades_count = db_local.get_all_trades(user_id)
     running_trades = [t for t in trades if t['status'] == 'RUNNING']
     completed_trades = [t for t in trades if t['status'] in ['CLOSED', 'TARGET_HIT', 'STOP_LOSS_HIT']]
 
-    conn = db.get_db_connection()
+    conn = db_local.get_db_connection()
     try:
         total_signals = conn.execute("SELECT COUNT(*) as count FROM buy_signals WHERE user_id = ?", (user_id,)).fetchone()["count"]
         successful_signals = conn.execute("SELECT COUNT(*) as count FROM buy_signals WHERE user_id = ? AND signal_status = 'CONFIRMED'", (user_id,)).fetchone()["count"]
@@ -51,10 +52,10 @@ def monitor_strategy(user_id):
         'last_market_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'market_status': 'Open'
     }
-    db.update_strategy_session_stats(user_id, session_id, stats_dict)
+    db_local.update_strategy_session_stats(user_id, session_id, stats_dict)
 
     # Save to health logs table
-    db.save_system_health(
+    db_local.save_system_health(
         websocket_status='Connected',
         broker_status='Connected',
         database_status='Healthy',
@@ -68,9 +69,10 @@ def monitor_strategy(user_id):
 
     return session_id
 
-def update_strategy_state(user_id, session_id, status):
+def update_strategy_state(user_id, session_id, status, db_adapter=None):
     """Explicitly archives or cancels session states."""
-    conn = db.get_db_connection()
+    db_local = db_adapter or db
+    conn = db_local.get_db_connection()
     try:
         conn.execute("""
             UPDATE strategy_sessions
@@ -82,9 +84,10 @@ def update_strategy_state(user_id, session_id, status):
     finally:
         conn.close()
 
-def calculate_live_statistics(user_id):
+def calculate_live_statistics(user_id, db_adapter=None):
     """Calculates win rates, drawdowns, profits factor, holding times, and strategy conversions."""
-    trades, total_count = db.get_all_trades(user_id, per_page=1000) # Load all trades for analysis
+    db_local = db_adapter or db
+    trades, total_count = db_local.get_all_trades(user_id, per_page=1000) # Load all trades for analysis
     
     completed = [t for t in trades if t['status'] in ['CLOSED', 'TARGET_HIT', 'STOP_LOSS_HIT']]
     total_completed = len(completed)
@@ -181,8 +184,8 @@ def calculate_live_statistics(user_id):
         if dd > max_drawdown:
             max_drawdown = dd
 
-    # Strategy funnel metrics
-    conn = db.get_db_connection()
+    # Strategy funnel funnel metrics
+    conn = db_local.get_db_connection()
     try:
         boxes_count = conn.execute("SELECT COUNT(*) as count FROM reference_boxes WHERE user_id = ?", (user_id,)).fetchone()["count"]
         signals_count = conn.execute("SELECT COUNT(*) as count FROM buy_signals WHERE user_id = ?", (user_id,)).fetchone()["count"]
@@ -237,11 +240,12 @@ def collect_system_metrics():
         'memory_usage': 48.2
     }
 
-def archive_completed_sessions(user_id):
+def archive_completed_sessions(user_id, db_adapter=None):
     """Sets active strategy session state to INACTIVE."""
-    session = db.get_active_strategy_session(user_id, 'institutional')
+    db_local = db_adapter or db
+    session = db_local.get_active_strategy_session(user_id, 'institutional')
     if session:
-        update_strategy_state(user_id, session['id'], 'INACTIVE')
+        update_strategy_state(user_id, session['id'], 'INACTIVE', db_adapter=db_local)
         logger.info(f"Archived Strategy session: ID {session['id']}")
         return True
     return False

@@ -64,7 +64,8 @@ def detect_fibonacci_cross(candle, levels):
     return crosses
 
 def create_reference_box(user_id, chart_type, instrument_symbol, timeframe, fib_direction, fib_level, 
-                         candle, crossed_direction):
+                         candle, crossed_direction, db_adapter=None):
+    db_local = db_adapter or db
     """
     Creates and saves a new Reference Box.
     Upper Boundary = High of the crossing candle.
@@ -80,7 +81,7 @@ def create_reference_box(user_id, chart_type, instrument_symbol, timeframe, fib_
     logger.info(f"Fibonacci Cross Detected: User {user_id} on {chart_type} level {fib_level} @ price {candle['close']}")
     
     # Save box to DB (handles duplicate check at DB level)
-    box_id = db.save_reference_box(
+    box_id = db_local.save_reference_box(
         user_id=user_id,
         chart_type=chart_type,
         instrument_symbol=instrument_symbol,
@@ -102,17 +103,18 @@ def create_reference_box(user_id, chart_type, instrument_symbol, timeframe, fib_
         logger.info(f"Reference Box Created: ID {box_id} on {chart_type} for level {fib_level}")
         
         # Replace previous active boxes for same level
-        db.replace_active_boxes(user_id, chart_type, fib_level, box_id)
+        db_local.replace_active_boxes(user_id, chart_type, fib_level, box_id)
         logger.info(f"Reference Box Replaced: Older boxes for user {user_id} on {chart_type} level {fib_level} replaced by ID {box_id}")
         
         # Enforce maximum active boxes limit per chart
-        enforce_max_boxes_limit(user_id, chart_type)
+        enforce_max_boxes_limit(user_id, chart_type, db_adapter=db_local)
 
     return box_id
 
-def enforce_max_boxes_limit(user_id, chart_type):
+def enforce_max_boxes_limit(user_id, chart_type, db_adapter=None):
     """Auto-expires older active boxes on a chart if count exceeds max_active_boxes limit."""
-    active = db.get_active_boxes(user_id, chart_type)
+    db_local = db_adapter or db
+    active = db_local.get_active_boxes(user_id, chart_type)
     max_limit = BOX_CONFIG['max_active_boxes']
     if len(active) > max_limit:
         # Sort by timestamp ascending (oldest first)
@@ -120,22 +122,23 @@ def enforce_max_boxes_limit(user_id, chart_type):
         excess_count = len(active) - max_limit
         for i in range(excess_count):
             old_box = active_sorted[i]
-            db.update_box_status(user_id, old_box['id'], 'EXPIRED')
+            db_local.update_box_status(user_id, old_box['id'], 'EXPIRED')
             logger.info(f"Reference Box Expired (Limit reached): ID {old_box['id']} on {chart_type} auto-expired")
 
-def check_and_expire_boxes(user_id):
+def check_and_expire_boxes(user_id, db_adapter=None):
     """Cycles active reference boxes and marks those exceeding auto_expiry_seconds as EXPIRED."""
-    active = db.get_active_boxes(user_id)
+    db_local = db_adapter or db
+    active = db_local.get_active_boxes(user_id)
     now_ts = int(time.time())
     expiry_limit = BOX_CONFIG['auto_expiry_seconds']
 
     for box in active:
         age = now_ts - box['candle_timestamp']
         if age > expiry_limit:
-            db.update_box_status(user_id, box['id'], 'EXPIRED')
+            db_local.update_box_status(user_id, box['id'], 'EXPIRED')
             logger.info(f"Reference Box Expired: ID {box['id']} on {box['chart_type']} level {box['fib_level']} expired by timeout")
 
-def process_latest_candles(user_id, chart_type, symbol, timeframe, candles, levels):
+def process_latest_candles(user_id, chart_type, symbol, timeframe, candles, levels, db_adapter=None):
     """
     Processes incoming candle stream for Fibonacci crossings.
     Typically called in the background update loop when a candle close is simulated.
@@ -156,34 +159,40 @@ def process_latest_candles(user_id, chart_type, symbol, timeframe, candles, leve
                 fib_direction=cross['fib_direction'],
                 fib_level=cross['level_name'],
                 candle=c,
-                crossed_direction=cross['crossed_direction']
+                crossed_direction=cross['crossed_direction'],
+                db_adapter=db_adapter
             )
 
 # ─── Strategy Required Functions Wrappers ───
 
-def validate_reference_box(user_id, box_id):
+def validate_reference_box(user_id, box_id, db_adapter=None):
     """Loads a box and validates it against current chart values."""
-    return db.get_reference_box_by_id(user_id, box_id)
+    db_local = db_adapter or db
+    return db_local.get_reference_box_by_id(user_id, box_id)
 
-def get_active_boxes(user_id, chart_type=None):
+def get_active_boxes(user_id, chart_type=None, db_adapter=None):
     """Exposes db.get_active_boxes."""
+    db_local = db_adapter or db
     # Run automatic expiry check first
-    check_and_expire_boxes(user_id)
-    return db.get_active_boxes(user_id, chart_type)
+    check_and_expire_boxes(user_id, db_adapter=db_local)
+    return db_local.get_active_boxes(user_id, chart_type)
 
-def invalidate_reference_box(user_id, box_id):
+def invalidate_reference_box(user_id, box_id, db_adapter=None):
     """Updates a box status to INVALIDATED."""
-    db.update_box_status(user_id, box_id, 'INVALIDATED')
+    db_local = db_adapter or db
+    db_local.update_box_status(user_id, box_id, 'INVALIDATED')
     logger.info(f"Reference Box Invalidated: ID {box_id} marked as INVALIDATED")
 
-def update_reference_box(user_id, box_id, status):
+def update_reference_box(user_id, box_id, status, db_adapter=None):
     """Updates a box status (ACTIVE, REPLACED, INVALIDATED, EXPIRED)."""
-    db.update_box_status(user_id, box_id, status)
+    db_local = db_adapter or db
+    db_local.update_box_status(user_id, box_id, status)
     logger.info(f"Reference Box Updated: ID {box_id} updated to {status}")
 
-def save_reference_box(user_id, box_data):
+def save_reference_box(user_id, box_data, db_adapter=None):
     """Wraps save_reference_box for dict-based configurations."""
-    return db.save_reference_box(
+    db_local = db_adapter or db
+    return db_local.save_reference_box(
         user_id=user_id,
         chart_type=box_data['chart_type'],
         instrument_symbol=box_data['instrument_symbol'],
@@ -201,6 +210,7 @@ def save_reference_box(user_id, box_data):
         crossed_direction=box_data.get('crossed_direction', 'UPWARD')
     )
 
-def load_reference_boxes(user_id):
+def load_reference_boxes(user_id, db_adapter=None):
     """Exposes all historical boxes for user audits."""
-    return db.load_all_boxes(user_id)
+    db_local = db_adapter or db
+    return db_local.load_all_boxes(user_id)

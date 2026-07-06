@@ -32,16 +32,17 @@ from strategy.feature_extractor import extract_facts
 from strategy.rule_engine import get_engine
 from strategy.execution_engine import execute_rule_signal
 
-def monitor_reference_boxes(user_id, candles_dict):
+def monitor_reference_boxes(user_id, candles_dict, db_adapter=None, execute_adapter=None):
     """
     Processes the latest candles for SENSEX, PE, and CE.
     Converts them into facts and feeds them to the stateless Rule Engine.
     """
+    db_local = db_adapter or db
     if not SIGNAL_CONFIG['enabled']:
         return
 
     # Fetch active boxes (this tells us the Fib lines and Reference Highs/Lows)
-    active_boxes = db.get_active_boxes(user_id)
+    active_boxes = db_local.get_active_boxes(user_id)
     
     # Map boxes by chart type for quick access
     boxes_by_chart = {box['chart_type']: box for box in active_boxes}
@@ -100,13 +101,10 @@ def monitor_reference_boxes(user_id, candles_dict):
         symbol = target_box['instrument_symbol']
         
         # Get the latest price for the target option
-        target_candles = candles_dict.get(target_chart, [])
-        if not target_candles:
-            continue
-        price = target_candles[-1]['close']
+        price = candles_dict.get(target_chart, [])[-1]['close'] if candles_dict.get(target_chart) else 0.0
         
         # Fire to Execution Engine (Bypasses old DB waiting states!)
-        execute_rule_signal(user_id, rule_id, action, symbol, price)
+        execute_rule_signal(user_id, rule_id, action, symbol, price, db_adapter=db_adapter, execute_adapter=execute_adapter)
 
 # ─── Strategy Required Wrappers ───
 
