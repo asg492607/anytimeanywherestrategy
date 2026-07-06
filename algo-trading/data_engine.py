@@ -37,19 +37,27 @@ REFRESH_IN_PROGRESS = False
 def initialize_angel_one():
     global smartApi, feedToken
     print("Authenticating with Angel One…")
-    smartApi = SmartConnect(api_key=API_KEY)
-    totp_val = pyotp.TOTP(TOTP_SECRET).now()
-    resp = smartApi.generateSession(CLIENT_CODE, PASSWORD, totp_val)
-    if resp['status']:
-        print("Login Successful!")
-        feedToken = smartApi.getfeedToken()
-        # Wait 5 seconds after login before any API calls — Angel One rate limits fresh sessions hard
-        time.sleep(5)
-        fetch_tokens()
-        # Pre-warm cache in background so first request is instant
+    try:
+        tempApi = SmartConnect(api_key=API_KEY)
+        tempApi.disable_ssl = True
+        totp_val = pyotp.TOTP(TOTP_SECRET).now()
+        resp = tempApi.generateSession(CLIENT_CODE, PASSWORD, totp_val)
+        if resp['status']:
+            print("Login Successful!")
+            smartApi = tempApi
+            feedToken = smartApi.getfeedToken()
+            # Wait 5 seconds after login before any API calls — Angel One rate limits fresh sessions hard
+            time.sleep(5)
+            fetch_tokens()
+        else:
+            print("Login Failed:", resp)
+            smartApi = None
+    except Exception as e:
+        print("Exception during Angel One Login:", e)
+        smartApi = None
+    finally:
+        # ALWAYS start the cache refresh thread so the UI doesn't hang in "loading" state forever
         threading.Thread(target=_refresh_cache, daemon=True).start()
-    else:
-        print("Login Failed:", resp)
 
 
 # ─── Scrip Master ──────────────────────────────────────────────────────────────
