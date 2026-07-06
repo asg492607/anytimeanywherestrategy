@@ -41,6 +41,21 @@ def monitor_reference_boxes(user_id, candles_dict, db_adapter=None, execute_adap
     if not SIGNAL_CONFIG['enabled']:
         return
 
+    # Map incoming candle keys (SPOT, CALL, PUT) to rule keys (SENSEX, CE, PE)
+    mapped_candles = {}
+    if 'SPOT' in candles_dict:
+        mapped_candles['SENSEX'] = candles_dict['SPOT']
+    if 'SENSEX' in candles_dict:
+        mapped_candles['SENSEX'] = candles_dict['SENSEX']
+    if 'CALL' in candles_dict:
+        mapped_candles['CE'] = candles_dict['CALL']
+    if 'CE' in candles_dict:
+        mapped_candles['CE'] = candles_dict['CE']
+    if 'PUT' in candles_dict:
+        mapped_candles['PE'] = candles_dict['PUT']
+    if 'PE' in candles_dict:
+        mapped_candles['PE'] = candles_dict['PE']
+
     # Fetch active boxes (this tells us the Fib lines and Reference Highs/Lows)
     active_boxes = db_local.get_active_boxes(user_id)
     
@@ -52,7 +67,7 @@ def monitor_reference_boxes(user_id, candles_dict, db_adapter=None, execute_adap
     facts_by_chart = {}
     
     for chart_type in ['SENSEX', 'PE', 'CE']:
-        candles = candles_dict.get(chart_type, [])
+        candles = mapped_candles.get(chart_type, [])
         if not candles:
             continue
             
@@ -101,7 +116,7 @@ def monitor_reference_boxes(user_id, candles_dict, db_adapter=None, execute_adap
         symbol = target_box['instrument_symbol']
         
         # Get the latest price for the target option
-        price = candles_dict.get(target_chart, [])[-1]['close'] if candles_dict.get(target_chart) else 0.0
+        price = mapped_candles.get(target_chart, [])[-1]['close'] if mapped_candles.get(target_chart) else 0.0
         
         # Fire to Execution Engine (Bypasses old DB waiting states!)
         execute_rule_signal(user_id, rule_id, action, symbol, price, db_adapter=db_adapter, execute_adapter=execute_adapter)

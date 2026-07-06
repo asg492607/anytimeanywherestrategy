@@ -6,14 +6,20 @@ logger = logging.getLogger('notification_engine')
 
 def trigger_notification(user_id, event_type, title, description, severity='INFO', trade_id=None, metadata=None):
     """Saves notification event to strategy_events table and prints log summary."""
-    # 1. Resolve active session
-    session = db.get_active_strategy_session(user_id, 'institutional')
+    # 1. Resolve active session and db adapter
+    import sys
+    db_local = db
+    if 'simulate_db' in sys.modules:
+        import simulate_db
+        db_local = simulate_db
+
+    session = db_local.get_active_strategy_session(user_id, 'institutional')
     session_id = session['id'] if session else None
     
     metadata_json = json.dumps(metadata) if metadata else None
     
     # 2. Persist notification as structured strategy event
-    event_id = db.log_strategy_event(
+    event_id = db_local.log_strategy_event(
         user_id=user_id,
         session_id=session_id,
         trade_id=trade_id,

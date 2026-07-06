@@ -118,96 +118,37 @@ def monitor_running_trades(user_id, candles_dict, db_adapter=None, execute_adapt
             execute_stop_loss_exit(user_id, trade, sl_event['id'], calculated_sl, latest_candle, db_adapter=db_local, execute_adapter=execute_adapter)
 
 def execute_stop_loss_exit(user_id, trade, sl_id, stop_loss_price, trigger_candle, db_adapter=None, execute_adapter=None):
-    """Places exit MARKET order with retries."""
+    """Places exit MARKET order using perform_manual_trade_close helper."""
     db_local = db_adapter or db
-    execute_local = execute_adapter or execute_order_api
-    db_local.update_stop_loss_status(user_id, sl_id, 'ORDER_SUBMITTED')
-    
-    symbol = trade['call_symbol'] or trade['put_symbol']
-    # Resolve token
-    token = None
     try:
-        from data_engine import SCRIP_MASTER_DATA
-        if SCRIP_MASTER_DATA:
-            for item in SCRIP_MASTER_DATA:
-                if item.get('symbol') == symbol:
-                    token = item['token']
-                    break
+        from strategy.execution_engine import perform_manual_trade_close
+        pnl = perform_manual_trade_close(
+            user_id=user_id,
+            trade_id=trade['id'],
+            exit_price=stop_loss_price,
+            exit_reason='Stop Loss Triggered',
+            db_adapter=db_local,
+            execute_adapter=execute_adapter
+        )
+        
+        exec_record = db_local.get_execution_for_trade(user_id, trade['id'])
+        broker_order_id = exec_record['broker_order_id'] if exec_record else f"SIM_SL_{trade['id']}"
+        
+        db_local.update_stop_loss_status(
+            user_id=user_id,
+            sl_id=sl_id,
+            status='COMPLETE',
+            exit_price=stop_loss_price,
+            broker_exit_order_id=broker_order_id
+        )
     except Exception as e:
-        logger.error(f"Error fetching token for exit symbol: {e}")
-
-    # Fallback default token if not resolved
-    if not token:
-        token = "99919001"
-
-    params = {
-        'variety': 'NORMAL',
-        'symbol': symbol,
-        'token': token,
-        'transaction_type': 'SELL',
-        'exchange': 'BFO',
-        'order_type': 'MARKET',
-        'product_type': 'CARRYFORWARD',
-        'quantity': trade['quantity']
-    }
-
-    max_attempts = STOP_LOSS_CONFIG['max_retries']
-    delay = STOP_LOSS_CONFIG['retry_delay_seconds']
-
-    for attempt in range(1, max_attempts + 1):
-        logger.info(f"Submitting Stop Loss Exit (Attempt {attempt}/{max_attempts}) for Trade ID {trade['id']}")
-        
-        # Place exit order
-        res = execute_local(params)
-        
-        if res['status']:
-            broker_order_id = res['broker_order_id']
-            
-            # Verify fill status
-            is_filled, fill_price, reason = verify_exit_order(broker_order_id, stop_loss_price)
-            
-            if is_filled is True:
-                # Execution Completed Successfully! Update trade and event.
-                update_trade_after_sl(
-                    user_id=user_id,
-                    trade_id=trade['id'],
-                    sl_id=sl_id,
-                    exit_price=fill_price,
-                    broker_order_id=broker_order_id,
-                    db_adapter=db_local
-                )
-                return
-            elif is_filled is False:
-                # Explicit broker rejection - do NOT retry
-                db_local.update_stop_loss_status(
-                    user_id=user_id,
-                    sl_id=sl_id,
-                    status='REJECTED',
-                    exit_reason=reason
-                )
-                logger.warning(f"Stop Loss Exit Rejected: Event ID {sl_id} rejected by broker: {reason}")
-                return
-            else:
-                # Still open/pending
-                db_local.update_stop_loss_status(
-                    user_id=user_id,
-                    sl_id=sl_id,
-                    status='ORDER_SUBMITTED',
-                    broker_exit_order_id=broker_order_id
-                )
-                return
-        else:
-            logger.warning(f"Stop Loss Exit failed on attempt {attempt}: {res['message']}")
-            if attempt < max_attempts:
-                time.sleep(delay)
-            else:
-                db_local.update_stop_loss_status(
-                    user_id=user_id,
-                    sl_id=sl_id,
-                    status='FAILED',
-                    exit_reason=f"Exit failed after {max_attempts} attempts: {res['message']}"
-                )
-                logger.error(f"Stop Loss Exit Failed: Event ID {sl_id} failed retry loops")
+        logger.error(f"Stop Loss Exit execution failed: {e}")
+        db_local.update_stop_loss_status(
+            user_id=user_id,
+            sl_id=sl_id,
+            status='FAILED',
+            exit_reason=str(e)
+        )
 
 def execute_order_api(params):
     """Submits order to Angel One OpenAPI. Mocked in offline mode."""

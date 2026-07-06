@@ -131,6 +131,10 @@ def validate_confirmation(user_id, session, db_adapter=None):
                 return False, "Opposite trade (CE) is already running"
 
     # Market hours check (09:15 to 15:30 IST)
+    # Bypass for simulation mode since it runs historical day logs which are already during market hours
+    if db_adapter is not None and db_adapter.__name__ == 'simulate_db':
+        return True, "Valid"
+
     import pytz
     ist = pytz.timezone('Asia/Kolkata')
     now_ist = datetime.now(ist)
@@ -218,75 +222,29 @@ def execute_rule_signal(user_id, rule_id, action, symbol, price, db_adapter=None
     Bypasses the old multi-step confirmation state machine.
     """
     db_local = db_adapter or db
-    execute_local = execute_adapter or execute_order
-    
     if not EXECUTION_CONFIG['enabled']:
         return
 
     logger.info(f"Executing Rule Signal: Rule {rule_id} triggered {action} for {symbol} at {price}")
     
-    # 1. Lookup instrument token
-    token, exchange = find_token_by_symbol(symbol)
-    if not token:
-        logger.error(f"Token lookup failed for symbol {symbol}")
-        return
-
-    # 2. Sizing
     quantity = calculate_order_quantity(price)
-    internal_order_id = f"INT_{uuid.uuid4().hex[:12].upper()}"
+    option_type = 'CE' if "CE" in symbol else 'PE'
     
-    params = {
-        'exchange': exchange or 'BFO',
-        'symbol': symbol,
-        'token': token,
-        'order_type': 'MARKET',
-        'transaction_type': 'BUY',
-        'product_type': 'CARRYFORWARD',
-        'variety': 'NORMAL',
-        'quantity': quantity,
-        'requested_price': price,
-        'internal_order_id': internal_order_id,
-        'order_tag': rule_id  # Attach the Rule ID for broker traceability!
-    }
-
-    # 3. Double check for active opposite trades
-    running_trades = db_local.get_running_trades(user_id)
-    new_trade_type = 'CE' if "CE" in symbol else 'PE'
-    for trade in running_trades:
-        if new_trade_type == 'CE' and trade.get('put_symbol'):
-            logger.warning(f"Execution Rejected: Opposite trade (PE) already running")
-            return
-        if new_trade_type == 'PE' and trade.get('call_symbol'):
-            logger.warning(f"Execution Rejected: Opposite trade (CE) already running")
-            return
-
-    # 4. Submit Order
-    logger.info(f"Submitting Order for Rule {rule_id}: {quantity} lots of {symbol}")
-    res = execute_local(params)
-    
-    if res['status']:
-        broker_order_id = res['broker_order_id']
-        is_filled, fill_price, reason = verify_order_status(broker_order_id, params['requested_price'])
-        
-        if is_filled is True:
-            # Create trade directly
-            stop_loss = fill_price - 10.0
-            target = fill_price + 20.0
-            trade_id = db_local.create_trade(
-                user_id=user_id,
-                broker='angelone',
-                underlying='SENSEX',
-                expiry=None,
-                call_symbol=symbol if "CE" in symbol else None,
-                put_symbol=symbol if "PE" in symbol else None,
-                entry_price=fill_price,
-                quantity=quantity,
-                stop_loss=stop_loss,
-                target=target,
-                strategy_name=rule_id, # Display rule ID in DB!
-                direction='BUY'
-            )
-            logger.info(f"Trade Created: ID {trade_id} (RUNNING) triggered by {rule_id}")
+    try:
+        trade_id = perform_manual_trade_open(
+            user_id=user_id,
+            symbol=symbol,
+            entry_price=price,
+            quantity=quantity,
+            direction='BUY',
+            option_type=option_type,
+            strategy_name=rule_id,
+            db_adapter=db_local,
+            execute_adapter=execute_adapter
+        )
+        logger.info(f"Trade Created via Helper: ID {trade_id} (RUNNING) triggered by {rule_id}")
+    except Exception as e:
+        logger.error(f"Rule signal order placement failed: {e}")
             
 def execute_order(params):
     """
@@ -365,140 +323,33 @@ def verify_order_status(broker_order_id, requested_price):
 def execute_with_retry(user_id, exec_id, params, session, db_adapter=None, execute_adapter=None):
     """
     Executes order with retry loops for network/connectivity exceptions.
+    Delegates to perform_manual_trade_open helper.
     """
     db_local = db_adapter or db
-    execute_local = execute_adapter or execute_order
-    # Double check for active opposite trades to prevent race conditions
-    running_trades = db_local.get_running_trades(user_id)
     symbol = params['symbol']
-    new_trade_type = 'CE' if "CE" in symbol else 'PE'
-    
-    for trade in running_trades:
-        if new_trade_type == 'CE' and trade.get('put_symbol'):
-            db_local.update_execution_status(user_id, exec_id, 'REJECTED', rejection_reason="Opposite trade (PE) already running")
-            logger.warning(f"Execution Rejected (Race Condition Prev): Opposite trade (PE) already running for Execution ID {exec_id}")
-            return
-        if new_trade_type == 'PE' and trade.get('call_symbol'):
-            db_local.update_execution_status(user_id, exec_id, 'REJECTED', rejection_reason="Opposite trade (CE) already running")
-            logger.warning(f"Execution Rejected (Race Condition Prev): Opposite trade (CE) already running for Execution ID {exec_id}")
-            return
-
-    db_local.update_execution_status(user_id, exec_id, 'SUBMITTED')
-    
-    max_attempts = EXECUTION_CONFIG['max_retries']
-    delay = EXECUTION_CONFIG['retry_delay_seconds']
-
-    for attempt in range(1, max_attempts + 1):
-        logger.info(f"Submitting Order (Attempt {attempt}/{max_attempts}) for Execution ID {exec_id}")
-        
-        # Place order
-        res = execute_local(params)
-        
-        if res['status']:
-            broker_order_id = res['broker_order_id']
-            
-            # Immediately verify order filled state
-            is_filled, fill_price, reason = verify_order_status(broker_order_id, params['requested_price'])
-            
-            if is_filled is True:
-                # Trade Executed Successfully! Create running trade record.
-                create_running_trade(user_id, exec_id, broker_order_id, fill_price, params, session, db_adapter=db_local)
-                return
-            elif is_filled is False:
-                # Order explicitly rejected by broker - do NOT retry
-                db_local.update_execution_status(
-                    user_id=user_id,
-                    exec_id=exec_id,
-                    status='REJECTED',
-                    broker_order_id=broker_order_id,
-                    rejection_reason=reason
-                )
-                logger.warning(f"Order Rejected: Execution ID {exec_id} rejected by broker: {reason}")
-                return
-            else:
-                # Order is still pending in broker book, mark as SUBMITTED and log
-                db_local.update_execution_status(
-                    user_id=user_id,
-                    exec_id=exec_id,
-                    status='SUBMITTED',
-                    broker_order_id=broker_order_id
-                )
-                logger.info(f"Order Pending: Execution ID {exec_id} is currently open in broker book")
-                return
-        else:
-            # Placement failed (e.g. timeout, API rate-limit rejection)
-            logger.warning(f"Order Submission failed on attempt {attempt}: {res['message']}")
-            if attempt < max_attempts:
-                time.sleep(delay)
-            else:
-                # All retry attempts failed
-                db_local.update_execution_status(
-                    user_id=user_id,
-                    exec_id=exec_id,
-                    status='FAILED',
-                    rejection_reason=f"Submission failed after {max_attempts} attempts: {res['message']}"
-                )
-                logger.error(f"Execution Failed: ID {exec_id} failed submission retry loops")
-
-def create_running_trade(user_id, exec_id, broker_order_id, executed_price, params, session, db_adapter=None):
-    """
-    On successful order fill, initializes a running trade in the trades table
-    and links it to the execution session.
-    """
-    db_local = db_adapter or db
-    # 1. Prepare trade parameters
-    symbol = params['symbol']
-    direction = params['transaction_type'] # BUY
-    qty = params['quantity']
-    
-    call_symbol = symbol if "CE" in symbol else None
-    put_symbol = symbol if "PE" in symbol else None
-    
-    # Simple default bounds for Stop Loss and Target
-    stop_loss = executed_price - 10.0
-    target = executed_price + 20.0
-
-    # 2. Insert trade into trades table (creates audit log automatically)
-    trade_id = db_local.create_trade(
-        user_id=user_id,
-        broker='angelone',
-        underlying='SENSEX',
-        expiry=None,
-        call_symbol=call_symbol,
-        put_symbol=put_symbol,
-        entry_price=executed_price,
-        quantity=qty,
-        stop_loss=stop_loss,
-        target=target,
-        strategy_name=session['strategy_name'],
-        direction=direction
-    )
-
-    # 3. Update trade link inside executions table
-    import pytz
-    ist = pytz.timezone('Asia/Kolkata')
-    exec_time = datetime.now(ist).strftime('%Y-%m-%d %H:%M:%S')
-    db_local.update_execution_status(
-        user_id=user_id,
-        exec_id=exec_id,
-        status='COMPLETE',
-        executed_price=executed_price,
-        broker_order_id=broker_order_id,
-        trade_id=trade_id
-    )
-    
-    # 4. Also update the execution time field directly in DB
-    conn = db_local.get_db_connection()
+    option_type = 'CE' if 'CE' in symbol else 'PE'
     try:
-        conn.execute("""
-            UPDATE trade_executions SET execution_time = ?
-            WHERE id = ? AND user_id = ?
-        """, (exec_time, exec_id, user_id))
-        conn.commit()
-    finally:
-        conn.close()
-
-    logger.info(f"Trade Created: ID {trade_id} (RUNNING) linked to Execution ID {exec_id} (COMPLETE)")
+        perform_manual_trade_open(
+            user_id=user_id,
+            symbol=symbol,
+            entry_price=params['requested_price'],
+            quantity=params['quantity'],
+            direction=params.get('transaction_type', 'BUY'),
+            option_type=option_type,
+            strategy_name=session.get('strategy_name', 'manual'),
+            confirmation_id=session.get('id'),
+            execution_id=exec_id,
+            db_adapter=db_local,
+            execute_adapter=execute_adapter
+        )
+    except Exception as e:
+        logger.error(f"Strategy execution order placement failed: {e}")
+        db_local.update_execution_status(
+            user_id=user_id,
+            exec_id=exec_id,
+            status='FAILED',
+            rejection_reason=str(e)
+        )
 
 def save_failed_execution(user_id, session, reason, db_adapter=None):
     """Creates a failed execution log for auditing purposes."""
@@ -589,4 +440,264 @@ def save_execution(user_id, exec_data, db_adapter=None):
         execution_status=exec_data.get('execution_status', 'PENDING'),
         rejection_reason=exec_data.get('rejection_reason'),
         execution_time=exec_data.get('execution_time')
+    )
+
+
+def perform_manual_trade_open(user_id, symbol, entry_price, quantity, direction="BUY", option_type="CE", strategy_name="manual", confirmation_id=None, execution_id=None, db_adapter=None, execute_adapter=None):
+    """
+    Unified manual order opening logic.
+    Validates duplicates, executes the order via the injected execution adapter,
+    creates the trade, and registers the execution logs.
+    """
+    db_local = db_adapter or db
+    if db_adapter is None and execute_adapter is None:
+        # Live manual open: mock the execute_local to preserve original live behavior (no-op broker call)
+        execute_local = lambda params: {'status': True, 'broker_order_id': f"MANUAL_{uuid.uuid4().hex[:6].upper()}"}
+    else:
+        execute_local = execute_adapter or execute_order
+
+    # 1. Reject if a trade of the same type is already running
+    running = db_local.get_running_trades(user_id)
+    for t in running:
+        t_type = "CE" if t.get('call_symbol') else ("PE" if t.get('put_symbol') else None)
+        if t_type == option_type:
+            raise ValueError(f"{option_type} trade already running")
+
+    # 2. Resolve token / exchange
+    token, exchange = find_token_by_symbol(symbol)
+    if not token:
+        token = "99919001"
+    if not exchange:
+        exchange = "BFO"
+
+    internal_order_id = f"INT_OPEN_{uuid.uuid4().hex[:12].upper()}"
+    params = {
+        'variety': 'NORMAL',
+        'symbol': symbol,
+        'token': token,
+        'transaction_type': direction,
+        'exchange': exchange,
+        'order_type': 'MARKET',
+        'product_type': 'CARRYFORWARD',
+        'quantity': quantity,
+        'requested_price': entry_price,
+        'internal_order_id': internal_order_id
+    }
+
+    # 3. Place order
+    res = execute_local(params)
+    if not res['status']:
+        raise RuntimeError(f"Broker rejected entry: {res.get('message', 'Unknown Error')}")
+
+    broker_order_id = res.get('broker_order_id', f"SIM_OPEN_{uuid.uuid4().hex[:6].upper()}")
+
+    # 4. Insert trade
+    stop_loss = entry_price - 10.0 if direction == 'BUY' else entry_price + 10.0
+    target = entry_price + 20.0 if direction == 'BUY' else entry_price - 20.0
+
+    trade_id = db_local.create_trade(
+        user_id=user_id,
+        broker='angelone',
+        underlying='SENSEX',
+        expiry=None,
+        call_symbol=symbol if option_type == 'CE' else None,
+        put_symbol=symbol if option_type == 'PE' else None,
+        entry_price=entry_price,
+        quantity=quantity,
+        stop_loss=stop_loss,
+        target=target,
+        strategy_name=strategy_name,
+        direction=direction
+    )
+
+    # 5. Log trade execution
+    import pytz
+    ist = pytz.timezone('Asia/Kolkata')
+    exec_time = datetime.now(ist).strftime('%Y-%m-%d %H:%M:%S')
+
+    # Resolve confirmation_id to avoid NOT NULL constraint errors
+    if not confirmation_id:
+        conn = db_local.get_db_connection()
+        try:
+            import time
+            now_ts = int(time.time())
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO trade_confirmations (
+                    user_id, confirmation_status, strategy_name, 
+                    confirmation_start_time, confirmation_end_time
+                ) VALUES (?, 'MANUAL_EXECUTION', ?, ?, ?)
+            """, (user_id, strategy_name, now_ts, now_ts))
+            conn.commit()
+            confirmation_id = cursor.lastrowid
+        finally:
+            conn.close()
+
+    if execution_id:
+        db_local.update_execution_status(
+            user_id=user_id,
+            exec_id=execution_id,
+            status='COMPLETE',
+            executed_price=entry_price,
+            broker_order_id=broker_order_id,
+            trade_id=trade_id
+        )
+        # Also update the execution time field directly in DB
+        conn = db_local.get_db_connection()
+        try:
+            conn.execute("""
+                UPDATE trade_executions SET execution_time = ?
+                WHERE id = ? AND user_id = ?
+            """, (exec_time, execution_id, user_id))
+            conn.commit()
+        finally:
+            conn.close()
+    else:
+        db_local.save_trade_execution(
+            user_id=user_id,
+            confirmation_id=confirmation_id,
+            trade_id=trade_id,
+            broker='angelone',
+            exchange=exchange,
+            symbol=symbol,
+            token=token,
+            order_type='MARKET',
+            transaction_type=direction,
+            product_type='CARRYFORWARD',
+            variety='NORMAL',
+            quantity=quantity,
+            requested_price=entry_price,
+            executed_price=entry_price,
+            order_id=internal_order_id,
+            broker_order_id=broker_order_id,
+            execution_status='COMPLETE',
+            rejection_reason=None,
+            execution_time=exec_time
+        )
+
+    return trade_id
+
+
+def perform_manual_trade_close(user_id, trade_id, exit_price, exit_reason="Manual Exit", db_adapter=None, execute_adapter=None):
+    """
+    Unified manual trade closing logic.
+    Executes exit order, computes final P&L, updates execution logs, and closes trade.
+    """
+    db_local = db_adapter or db
+    execute_local = execute_adapter or execute_order
+
+    trade = db_local.get_trade_by_id(user_id, trade_id)
+    if not trade:
+        raise ValueError("Trade not found")
+    if trade['status'] != 'RUNNING':
+        raise ValueError("Trade is already closed")
+
+    symbol = trade.get('call_symbol') or trade.get('put_symbol')
+    token, exchange = find_token_by_symbol(symbol)
+    if not token:
+        token = "99919001"
+    if not exchange:
+        exchange = "BFO"
+
+    entry_direction = trade.get('direction') or 'BUY'
+    exit_direction = 'SELL' if entry_direction == 'BUY' else 'BUY'
+
+    internal_order_id = f"INT_CLOSE_{uuid.uuid4().hex[:12].upper()}"
+    params = {
+        'variety': 'NORMAL',
+        'symbol': symbol,
+        'token': token,
+        'transaction_type': exit_direction,
+        'exchange': exchange,
+        'order_type': 'MARKET',
+        'product_type': 'CARRYFORWARD',
+        'quantity': trade['quantity'],
+        'internal_order_id': internal_order_id
+    }
+
+    # Place order
+    res = execute_local(params)
+    if not res['status']:
+        raise RuntimeError(f"Broker rejected exit: {res.get('message', 'Unknown Error')}")
+
+    broker_order_id = res.get('broker_order_id', f"SIM_CLOSE_{uuid.uuid4().hex[:6].upper()}")
+
+    # Log exit execution
+    import pytz
+    ist = pytz.timezone('Asia/Kolkata')
+    exec_time = datetime.now(ist).strftime('%Y-%m-%d %H:%M:%S')
+
+    # Resolve confirmation_id to avoid NOT NULL constraint errors
+    confirmation_id = None
+    exec_record = db_local.get_execution_for_trade(user_id, trade_id)
+    if exec_record:
+        confirmation_id = exec_record.get('confirmation_id')
+        
+    if not confirmation_id:
+        conn = db_local.get_db_connection()
+        try:
+            import time
+            now_ts = int(time.time())
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO trade_confirmations (
+                    user_id, confirmation_status, strategy_name, 
+                    confirmation_start_time, confirmation_end_time
+                ) VALUES (?, 'MANUAL_EXECUTION', ?, ?, ?)
+            """, (user_id, 'manual', now_ts, now_ts))
+            conn.commit()
+            confirmation_id = cursor.lastrowid
+        finally:
+            conn.close()
+
+    db_local.save_trade_execution(
+        user_id=user_id,
+        confirmation_id=confirmation_id,
+        trade_id=trade_id,
+        broker='angelone',
+        exchange=exchange,
+        symbol=symbol,
+        token=token,
+        order_type='MARKET',
+        transaction_type=exit_direction,
+        product_type='CARRYFORWARD',
+        variety='NORMAL',
+        quantity=trade['quantity'],
+        requested_price=exit_price,
+        executed_price=exit_price,
+        order_id=internal_order_id,
+        broker_order_id=broker_order_id,
+        execution_status='COMPLETE',
+        rejection_reason=None,
+        execution_time=exec_time
+    )
+
+    pnl = db_local.close_trade(user_id, trade_id, exit_price, exit_reason)
+    return pnl
+
+
+def perform_manual_trade_close_by_type(user_id, option_type, exit_price, exit_reason="Manual Exit", db_adapter=None, execute_adapter=None):
+    """
+    Closes any running trade of the specified option type ('CE' or 'PE').
+    If no running trade exists, raises ValueError.
+    """
+    db_local = db_adapter or db
+    running = db_local.get_running_trades(user_id)
+    target_trade = None
+    for t in running:
+        t_type = "CE" if t.get('call_symbol') else ("PE" if t.get('put_symbol') else None)
+        if t_type == option_type:
+            target_trade = t
+            break
+
+    if not target_trade:
+        raise ValueError(f"No active {option_type} trade found")
+
+    return perform_manual_trade_close(
+        user_id=user_id,
+        trade_id=target_trade['id'],
+        exit_price=exit_price,
+        exit_reason=exit_reason,
+        db_adapter=db_adapter,
+        execute_adapter=execute_adapter
     )

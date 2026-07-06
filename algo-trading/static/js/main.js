@@ -2005,7 +2005,8 @@ document.addEventListener('DOMContentLoaded', () => {
     async function handleManualExit(tradeId, currentLtp) {
         if (confirm("Are you sure you want to exit this trade?")) {
             try {
-                const response = await fetch(`/api/trades/${tradeId}/close`, {
+                const url = window.IS_SIMULATION ? `/api/simulate/trades/${tradeId}/close` : `/api/trades/${tradeId}/close`;
+                const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ exit_price: currentLtp, exit_reason: 'Manual Exit via Dashboard' })
@@ -2013,7 +2014,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const res = await response.json();
                 if (res.status === 'success') {
                     showToastLocal(`✅ Position Closed. Realised P&L: ₹${res.pnl.toFixed(2)}`, res.pnl >= 0 ? 'buy' : 'sell');
-                    pollLivePnL();
+                    if (window.IS_SIMULATION) {
+                        if (window.fetchSimData) await window.fetchSimData(false);
+                    } else {
+                        pollLivePnL();
+                    }
                 } else {
                     showToastLocal(`❌ Exit Failed: ${res.message}`, 'sell');
                 }
@@ -2201,9 +2206,10 @@ async function refreshLogs() {
         if (severity) params.set('severity', severity);
         if (search)   params.set('search',   search);
         params.set('limit', '80');
-        const res  = await fetch(`/api/system/logs?${params}`);
+        const url = window.IS_SIMULATION ? `/api/simulate/system/logs?${params}` : `/api/system/logs?${params}`;
+        const res  = await fetch(url);
         const data = await res.json();
-        const events = data.events || data || [];
+        const events = data.events || data.logs || data || [];
 
         if (!events.length) {
             list.innerHTML = '<div style="color:#787b86;font-size:12px;text-align:center;padding:20px;">No events logged yet.</div>';
@@ -2398,7 +2404,7 @@ window.syncActiveSymbols = function(data) {
 
 /* ── Hook into existing trade events for in-app notifications ── */
 // Override showToast to also push to notification list
-const _origShowToast = window.showToast;
+const _origShowToast = window.showToast || showToast;
 window.showToast = function(message, type) {
     if (_origShowToast) _origShowToast(message, type);
     const clean = message.replace(/<[^>]+>/g, '');

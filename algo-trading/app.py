@@ -17,7 +17,7 @@ from strategy.reference_box_engine import process_latest_candles, get_active_box
 from strategy.strategy_monitor import monitor_strategy, calculate_live_statistics
 from strategy.buy_signal_engine import monitor_reference_boxes, get_active_signals as get_active_signals_logic, check_and_expire_signals
 from strategy.confirmation_engine import monitor_buy_signals, expire_old_sessions
-from strategy.execution_engine import monitor_confirmations, retry_execution as retry_execution_logic, cancel_execution as cancel_execution_logic
+from strategy.execution_engine import monitor_confirmations, retry_execution as retry_execution_logic, cancel_execution as cancel_execution_logic, perform_manual_trade_open, perform_manual_trade_close, perform_manual_trade_close_by_type
 from strategy.stop_loss_engine import (
     monitor_running_trades, execute_stop_loss, retry_exit_order as retry_exit_order_logic, expire_monitoring as expire_monitoring_logic
 )
@@ -203,28 +203,28 @@ def get_trade_details_api(trade_id):
 @login_required
 def create_trade_api():
     payload = request.json or {}
-    broker = payload.get('broker', 'angelone')
-    underlying = payload.get('underlying', 'SENSEX')
-    expiry = payload.get('expiry')
     call_symbol = payload.get('call_symbol')
     put_symbol = payload.get('put_symbol')
     entry_price = payload.get('entry_price')
     quantity = payload.get('quantity')
-    stop_loss = payload.get('stop_loss')
-    target = payload.get('target')
-    strategy_name = payload.get('strategy_name')
     direction = payload.get('direction', 'BUY')
     
     if not entry_price or not quantity:
         return jsonify({'status': 'error', 'message': 'Entry price and quantity are required'}), 400
         
+    symbol = call_symbol if call_symbol else put_symbol
+    option_type = 'CE' if call_symbol else 'PE'
+    if not symbol:
+        return jsonify({'status': 'error', 'message': 'Option symbol is required'}), 400
+        
     try:
-        trade_id = create_trade(
-            g.user['id'], broker, underlying, expiry, call_symbol, put_symbol,
-            float(entry_price), int(quantity),
-            float(stop_loss) if stop_loss is not None else None,
-            float(target) if target is not None else None,
-            strategy_name, direction
+        trade_id = perform_manual_trade_open(
+            user_id=g.user['id'],
+            symbol=symbol,
+            entry_price=float(entry_price),
+            quantity=int(quantity),
+            direction=direction,
+            option_type=option_type
         )
         return jsonify({'status': 'success', 'trade_id': trade_id})
     except Exception as e:
@@ -256,52 +256,16 @@ def close_trade_api(trade_id):
         return jsonify({'status': 'error', 'message': 'Exit price is required'}), 400
         
     try:
-        trade = get_trade_by_id(g.user['id'], trade_id)
-        if not trade:
-            return jsonify({'status': 'error', 'message': 'Trade not found'}), 404
-        if trade['status'] != 'RUNNING':
-            return jsonify({'status': 'error', 'message': 'Trade is already closed'}), 400
-
-        symbol = trade.get('call_symbol') or trade.get('put_symbol')
-        token = "99919001"
-        exchange = "BFO"
-        
-        try:
-            from data_engine import SCRIP_MASTER_DATA
-            if SCRIP_MASTER_DATA:
-                for item in SCRIP_MASTER_DATA:
-                    if item.get('symbol') == symbol:
-                        token = item['token']
-                        exchange = item.get('exch_seg', 'BFO')
-                        break
-        except Exception:
-            pass
-
-        entry_direction = trade.get('direction') or 'BUY'
-        exit_direction = 'SELL' if entry_direction == 'BUY' else 'BUY'
-
-        params = {
-            'variety': 'NORMAL',
-            'symbol': symbol,
-            'token': token,
-            'transaction_type': exit_direction,
-            'exchange': exchange,
-            'order_type': 'MARKET',
-            'product_type': 'CARRYFORWARD',
-            'quantity': trade['quantity']
-        }
-        
-        from strategy.execution_engine import execute_order
-        res = execute_order(params)
-        
-        if not res['status']:
-            return jsonify({'status': 'error', 'message': f"Broker rejected exit: {res.get('message', 'Unknown Error')}"}), 400
-
-        pnl = close_trade(g.user['id'], trade_id, float(exit_price), exit_reason)
+        pnl = perform_manual_trade_close(
+            user_id=g.user['id'],
+            trade_id=trade_id,
+            exit_price=float(exit_price),
+            exit_reason=exit_reason
+        )
         return jsonify({'status': 'success', 'pnl': pnl})
     except PermissionError:
         return jsonify({'status': 'error', 'message': 'Access denied'}), 403
-    except ValueError as e:
+    except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
 
 def get_live_price_by_symbol(symbol):
@@ -465,6 +429,84 @@ def simulate_data():
     from simulate_engine import get_simulation_data
     res = get_simulation_data(g.user['id'])
     return jsonify(res)
+
+
+@app.route('/api/simulate/test_debug')
+def simulate_test_debug():
+    import traceback
+    try:
+        import simulate_db
+        import simulate_execution
+        trade_id = perform_manual_trade_open(
+            user_id=1,
+            symbol='SENSEX2670979000CE',
+            entry_price=150.0,
+            quantity=10,
+            direction='BUY',
+            option_type='CE',
+            db_adapter=simulate_db,
+            execute_adapter=simulate_execution.mock_execute
+        )
+        return f"SUCCESS: {trade_id}"
+    except Exception as e:
+        return f"ERROR:<pre>{traceback.format_exc()}</pre>"
+
+
+@app.route('/api/simulate/trades', methods=['POST'])
+@login_required
+def create_simulate_trade_api():
+    payload = request.json or {}
+    symbol = payload.get('symbol')
+    entry_price = payload.get('entry_price')
+    quantity = payload.get('quantity', 10)
+    direction = payload.get('direction', 'BUY')
+    option_type = payload.get('option_type', 'CE')
+    
+    if not symbol or entry_price is None:
+        return jsonify({'status': 'error', 'message': 'Symbol and entry price are required'}), 400
+        
+    try:
+        import simulate_db
+        import simulate_execution
+        trade_id = perform_manual_trade_open(
+            user_id=g.user['id'],
+            symbol=symbol,
+            entry_price=float(entry_price),
+            quantity=int(quantity),
+            direction=direction,
+            option_type=option_type,
+            db_adapter=simulate_db,
+            execute_adapter=simulate_execution.mock_execute
+        )
+        return jsonify({'status': 'success', 'trade_id': trade_id})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+
+@app.route('/api/simulate/trades/<int:trade_id>/close', methods=['POST'])
+@login_required
+def close_simulate_trade_api(trade_id):
+    payload = request.json or {}
+    exit_price = payload.get('exit_price')
+    exit_reason = payload.get('exit_reason', 'Manual Exit')
+    
+    if exit_price is None:
+        return jsonify({'status': 'error', 'message': 'Exit price is required'}), 400
+        
+    try:
+        import simulate_db
+        import simulate_execution
+        pnl = perform_manual_trade_close(
+            user_id=g.user['id'],
+            trade_id=trade_id,
+            exit_price=float(exit_price),
+            exit_reason=exit_reason,
+            db_adapter=simulate_db,
+            execute_adapter=simulate_execution.mock_execute
+        )
+        return jsonify({'status': 'success', 'pnl': pnl})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
 
 @app.route('/api/search')
 @login_required
@@ -1160,6 +1202,23 @@ def get_system_logs_api():
         limit = int(request.args.get('limit', 100))
         
         logs = get_strategy_logs(g.user['id'], search, severity, event_type, limit)
+        return jsonify({'status': 'success', 'logs': logs})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/simulate/system/logs', methods=['GET'])
+@login_required
+def get_simulate_system_logs_api():
+    """Returns database-saved simulation log statements."""
+    try:
+        search = request.args.get('search')
+        severity = request.args.get('severity')
+        event_type = request.args.get('event_type')
+        limit = int(request.args.get('limit', 100))
+        
+        import simulate_db
+        logs = simulate_db.get_strategy_logs(g.user['id'], search, severity, event_type, limit)
         return jsonify({'status': 'success', 'logs': logs})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500

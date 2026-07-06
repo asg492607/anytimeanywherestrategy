@@ -191,99 +191,40 @@ def get_levels_for_chart(chart_type, db_data=None):
     levels, high, low, start, end = result
     return levels
 
-def execute_target_exit(user_id, trade, target_id, target_price, trigger_candle, chart_type, db_adapter=None, execute_adapter=None):
-    """Places MARKET exit SELL order with retry handlers."""
+def execute_target_exit(user_id, trade, target_id, target_price, db_adapter=None, execute_adapter=None):
+    """Places exit MARKET order using perform_manual_trade_close helper."""
     db_local = db_adapter or db
-    execute_local = execute_adapter or execute_order_api
-    db_local.update_target_exit_status(user_id, target_id, 'ORDER_SUBMITTED')
-
-    symbol = trade['call_symbol'] or trade['put_symbol']
-    # Resolve token
-    token = None
     try:
-        from data_engine import SCRIP_MASTER_DATA
-        if SCRIP_MASTER_DATA:
-            for item in SCRIP_MASTER_DATA:
-                if item.get('symbol') == symbol:
-                    token = item['token']
-                    break
+        from strategy.execution_engine import perform_manual_trade_close
+        pnl = perform_manual_trade_close(
+            user_id=user_id,
+            trade_id=trade['id'],
+            exit_price=target_price,
+            exit_reason='Target Hit',
+            db_adapter=db_local,
+            execute_adapter=execute_adapter
+        )
+        
+        exec_record = db_local.get_execution_for_trade(user_id, trade['id'])
+        broker_order_id = exec_record['broker_order_id'] if exec_record else f"SIM_TGT_{trade['id']}"
+        
+        db_local.update_target_exit_status(
+            user_id=user_id,
+            target_id=target_id,
+            status='COMPLETE',
+            exit_price=target_price,
+            broker_order_id=broker_order_id,
+            target_level=TARGET_CONFIG['default_target_level'],
+            target_price=target_price
+        )
     except Exception as e:
-        logger.error(f"Error fetching exit token: {e}")
-
-    if not token:
-        token = "99919001"
-
-    entry_direction = trade.get('direction', 'BUY')
-    exit_direction = 'SELL' if entry_direction == 'BUY' else 'BUY'
-
-    params = {
-        'variety': 'NORMAL',
-        'symbol': symbol,
-        'token': token,
-        'transaction_type': exit_direction,
-        'exchange': 'BFO',
-        'order_type': 'MARKET',
-        'product_type': 'CARRYFORWARD',
-        'quantity': trade['quantity']
-    }
-
-    max_attempts = TARGET_CONFIG['max_retries']
-    delay = TARGET_CONFIG['retry_delay_seconds']
-
-    for attempt in range(1, max_attempts + 1):
-        logger.info(f"Submitting Target Exit (Attempt {attempt}/{max_attempts}) for Trade ID {trade['id']}")
-        
-        res = execute_local(params)
-        
-        if res['status']:
-            broker_order_id = res['broker_order_id']
-            
-            # Verify status
-            is_filled, fill_price, reason = verify_exit_order(broker_order_id, target_price)
-            
-            if is_filled is True:
-                update_trade_after_target(
-                    user_id=user_id,
-                    trade_id=trade['id'],
-                    target_id=target_id,
-                    exit_price=fill_price,
-                    broker_order_id=broker_order_id,
-                    target_level=TARGET_CONFIG['default_target_level'],
-                    target_price=target_price,
-                    db_adapter=db_local
-                )
-                return
-            elif is_filled is False:
-                # Rejected
-                db_local.update_target_exit_status(
-                    user_id=user_id,
-                    target_id=target_id,
-                    status='REJECTED',
-                    exit_reason=reason
-                )
-                logger.warning(f"Target Exit Rejected: Event ID {target_id} rejected by broker: {reason}")
-                return
-            else:
-                # Pending
-                db_local.update_target_exit_status(
-                    user_id=user_id,
-                    target_id=target_id,
-                    status='ORDER_SUBMITTED',
-                    broker_exit_order_id=broker_order_id
-                )
-                return
-        else:
-            logger.warning(f"Target Exit failed on attempt {attempt}: {res['message']}")
-            if attempt < max_attempts:
-                time.sleep(delay)
-            else:
-                db_local.update_target_exit_status(
-                    user_id=user_id,
-                    target_id=target_id,
-                    status='FAILED',
-                    exit_reason=f"Target exit failed after {max_attempts} attempts: {res['message']}"
-                )
-                logger.error(f"Target Exit Failed: Event ID {target_id} failed retry loops")
+        logger.error(f"Target Exit execution failed: {e}")
+        db_local.update_target_exit_status(
+            user_id=user_id,
+            target_id=target_id,
+            status='FAILED',
+            exit_reason=str(e)
+        )
 
 def execute_order_api(params):
     """API connector to place orders. Mocked in offline modes."""
