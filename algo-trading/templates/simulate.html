@@ -935,17 +935,37 @@
 
                 // ── Charts (reuses renderDashboard from main.js exactly as live mode) ──
                 if (window.renderDashboard) {
-                    const clonedData = JSON.parse(JSON.stringify(data));
-                    ['sensex', 'call', 'put'].forEach(key => {
-                        if (clonedData[key] && clonedData[key].intraday) {
-                            // The backend prepends historical candles. The last element is the forming candle.
-                            // We slice off the last element so renderDashboard draws only immutable/completed candles.
-                            clonedData[key].intraday = clonedData[key].intraday.slice(0, -1);
-                        }
-                    });
-                    window.renderDashboard(clonedData);
+                    if (isInitial) {
+                        const clonedData = JSON.parse(JSON.stringify(data));
+                        ['sensex', 'call', 'put'].forEach(key => {
+                            if (clonedData[key] && clonedData[key].intraday) {
+                                clonedData[key].intraday = clonedData[key].intraday.slice(0, -1);
+                            }
+                        });
+                        window.renderDashboard(clonedData);
+                    } else if (window.activeCharts && window.activeCharts.length === 3) {
+                        // For ticks after the first, just update the previous fully formed candle
+                        const mappedKeys = ['sensex', 'call', 'put'];
+                        mappedKeys.forEach((key, idx) => {
+                            const intradayData = data[key] && data[key].intraday;
+                            if (intradayData && intradayData.length > 1) {
+                                const completedCandle = intradayData[intradayData.length - 2];
+                                const cObj = window.activeCharts[idx];
+                                if (cObj && cObj.candleSeries) {
+                                    cObj.candleSeries.update(completedCandle);
+                                    if (cObj.volumeSeries) {
+                                        cObj.volumeSeries.update({
+                                            time: completedCandle.time,
+                                            value: completedCandle.volume,
+                                            color: completedCandle.close >= completedCandle.open ? 'rgba(8, 153, 129, 0.5)' : 'rgba(242, 54, 69, 0.5)'
+                                        });
+                                    }
+                                }
+                            }
+                        });
+                    }
 
-                    // Instantly render the first tick of the active forming candle K
+                    // Instantly render the first tick of the active forming candle
                     streamPartialCandle();
                 }
 
