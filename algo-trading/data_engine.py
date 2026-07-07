@@ -442,8 +442,8 @@ def _fetch_all_data():
                     'low':  o_day_for_s_low['low']
                 }
 
-    # add_true_anchors(ce_sym, ce_1w, ce_1d, sx_1w, sx_1d, False)
-    # add_true_anchors(pe_sym, pe_1w, pe_1d, sx_1w, sx_1d, True)
+    add_true_anchors(ce_sym, ce_1w, ce_1d, sx_1w, sx_1d, False)
+    add_true_anchors(pe_sym, pe_1w, pe_1d, sx_1w, sx_1d, True)
 
     sx_fibs = get_fibonacci_danger_zone(sx_1w, sx_sym, dynamic_fibs)
     ce_fibs = get_fibonacci_danger_zone(ce_1w, ce_sym, dynamic_fibs)

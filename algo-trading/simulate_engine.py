@@ -332,6 +332,34 @@ def start_simulation(user_id, date_str, ce_symbol=None, pe_symbol=None):
     from data_engine import MANUAL_FIBS
     dynamic_fibs = dict(MANUAL_FIBS)
     
+    def add_true_anchors_sim(sym, opt_1w, opt_1d, s_1w, s_1d, is_put):
+        if sym in dynamic_fibs: return
+        if not opt_1w or not opt_1d or not s_1w or not s_1d: return
+        from strategy.fibonacci_engine import _auto_weekly_high_low
+        s_w_high, s_w_low, week_start, week_end = _auto_weekly_high_low(s_1w)
+        if week_start is None or week_end is None: return
+        s_days = [d for d in s_1d if week_start <= datetime.fromtimestamp(d['time'], tz=IST).date() <= week_end]
+        o_days = [d for d in opt_1d if week_start <= datetime.fromtimestamp(d['time'], tz=IST).date() <= week_end]
+        if not s_days or not o_days: return
+        s_high_day = max(s_days, key=lambda d: d['high'])
+        s_low_day = min(s_days, key=lambda d: d['low'])
+        s_high_date = datetime.fromtimestamp(s_high_day['time'], tz=IST).date()
+        s_low_date = datetime.fromtimestamp(s_low_day['time'], tz=IST).date()
+        o_day_for_s_high = next((d for d in o_days if datetime.fromtimestamp(d['time'], tz=IST).date() == s_high_date), None)
+        o_day_for_s_low = next((d for d in o_days if datetime.fromtimestamp(d['time'], tz=IST).date() == s_low_date), None)
+        if o_day_for_s_high and o_day_for_s_low:
+            if is_put:
+                dynamic_fibs[sym] = {'high': o_day_for_s_low['high'], 'low':  o_day_for_s_high['low']}
+            else:
+                dynamic_fibs[sym] = {'high': o_day_for_s_high['high'], 'low':  o_day_for_s_low['low']}
+
+    sx_1w = weekly_fibs_dict['sensex']['weekly']
+    ce_1w = weekly_fibs_dict['call']['weekly']
+    pe_1w = weekly_fibs_dict['put']['weekly']
+    
+    add_true_anchors_sim(ce_symbol, ce_1w, ce_1d, sx_1w, sx_1d, False)
+    add_true_anchors_sim(pe_symbol, pe_1w, pe_1d, sx_1w, sx_1d, True)
+    
     sx_res = get_fibonacci_levels(weekly_fibs_dict['sensex']['weekly'], 'SENSEX', dynamic_fibs)
     ce_res = get_fibonacci_levels(weekly_fibs_dict['call']['weekly'], ce_symbol, dynamic_fibs)
     pe_res = get_fibonacci_levels(weekly_fibs_dict['put']['weekly'], pe_symbol, dynamic_fibs)
