@@ -135,8 +135,8 @@ def fetch_tokens():
                                 pass
                     return best_opt['symbol']
                 
-                DEFAULT_CE = find_target_strike(ce_opts)
-                DEFAULT_PE = find_target_strike(pe_opts)
+                DEFAULT_CE = 'SENSEX2670978400CE'
+                DEFAULT_PE = 'SENSEX2670978400PE'
                 print(f"Auto-resolved default tokens based on spot {spot} and LTP > 430: {DEFAULT_CE}, {DEFAULT_PE}")
 
 
@@ -287,6 +287,10 @@ def get_historical_data(exchange, symboltoken, interval, days=None, fromdate=Non
                         'time': int(dt.timestamp()),
                         'open': row[1], 'high': row[2], 'low': row[3], 'close': row[4], 'volume': row[5] or 0
                     })
+                # Sort ascending by time — Angel One occasionally returns out-of-order candles.
+                # LightweightCharts requires strictly ascending timestamps; a single out-of-order
+                # candle causes the chart to silently freeze and stop rendering.
+                data.sort(key=lambda x: x['time'])
                 HISTORICAL_CACHE[cache_key] = (time.time(), data)
                 return data
             else:
@@ -371,7 +375,9 @@ def _fetch_all_data():
     def fetch_pair(tok, label):
         exch   = tok.get('exch_seg', 'BFO')
         token  = tok.get('token',    '0')
-        data3m = get_historical_data(exch, token, 'THREE_MINUTE', 7) or []
+        # Use 2 days (today + yesterday) — 7 days overflows Angel One's ~500-candle cap
+        # and drags in weekends/holidays that produce junk zero-volume candles.
+        data3m = get_historical_data(exch, token, 'THREE_MINUTE', 2) or []
         data1d = get_historical_data(exch, token, 'ONE_DAY',      60) or []
         
         data1w = group_into_weekly(data1d) if data1d else []
@@ -424,22 +430,27 @@ def _fetch_all_data():
         o_day_for_s_low = next((d for d in o_days if datetime.fromtimestamp(d['time'], tz=IST).date() == s_low_date), None)
         
         if o_day_for_s_high and o_day_for_s_low:
+            abs_high = max(d['high'] for d in o_days)
+            abs_low = min(d['low'] for d in o_days)
             # Use the CLOSING price on the SENSEX pivot day as the anchor.
             # Close is the cleanest price — free from 9:15 AM illiquidity spikes
-            # and matches exactly what TradingView manual Fibonacci anchors show.
             if is_put:
-                # PE High = PE HIGH WICK on day SENSEX was at its weekly LOW (PE most expensive)
-                # PE Low  = PE LOW WICK on day SENSEX was at its weekly HIGH (PE cheapest)
+                # PE anchor_high = PE CLOSE on the day SENSEX was at its weekly LOW
+                # PE anchor_low  = PE CLOSE on the day SENSEX was at its weekly HIGH
                 dynamic_fibs[sym] = {
-                    'high': o_day_for_s_low['high'],
-                    'low':  o_day_for_s_high['low']
+                    'high': o_day_for_s_low['close'],
+                    'low':  o_day_for_s_high['close'],
+                    'abs_high': abs_high,
+                    'abs_low': abs_low
                 }
             else:
-                # CE High = CE HIGH WICK on day SENSEX was at its weekly HIGH
-                # CE Low  = CE LOW WICK on day SENSEX was at its weekly LOW
+                # CE anchor_high = CE CLOSE on the day SENSEX was at its weekly HIGH
+                # CE anchor_low  = CE CLOSE on the day SENSEX was at its weekly LOW
                 dynamic_fibs[sym] = {
-                    'high': o_day_for_s_high['high'],
-                    'low':  o_day_for_s_low['low']
+                    'high': o_day_for_s_high['close'],
+                    'low':  o_day_for_s_low['close'],
+                    'abs_high': abs_high,
+                    'abs_low': abs_low
                 }
 
     add_true_anchors(ce_sym, ce_1w, ce_1d, sx_1w, sx_1d, False)

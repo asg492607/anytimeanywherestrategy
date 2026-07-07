@@ -333,9 +333,14 @@ function renderDashboard(data) {
         
         // Check if we need to spawn a new candle (time rollover)
         if (currentTimestamp >= lastData.time + candleDuration) {
+            // Snap to the correct 3-minute boundary using floor division.
+            // DO NOT use lastData.time + candleDuration — historical option candles are NOT
+            // evenly spaced (illiquid contracts can have gaps of 5–30 min between trades).
+            // Adding 180s to a mid-gap candle puts the live candle at the wrong X-axis slot.
+            const boundary = Math.floor(currentTimestamp / candleDuration) * candleDuration;
             // Create new candle inheriting the last close
             const newCandle = {
-                time: lastData.time + candleDuration,
+                time: boundary,
                 open: lastData.close,
                 high: lastData.close,
                 low: lastData.close,
@@ -783,10 +788,15 @@ function createChartWithZones(containerId, instrumentData, symbol, signal, globa
 
         // ── Highlight Specific Reversal Zones ─────────────────────────────────
         const REVERSAL_ZONES = [
-            ['f1_1_414', 'f1_1_390', 'rgba(242, 54, 69, 0.15)'],  // Top Extension Zone: 1.41 to 1.39
-            ['f1_0_786', 'f2_0_236', 'rgba(242, 54, 69, 0.20)'],  // Top Confluence Zone: f1 0.786 to f2 0.236
-            ['f1_0_236', 'f2_0_786', 'rgba(0, 188, 212, 0.20)'],  // Bottom Confluence Zone: f1 0.236 to f2 0.786
-            ['f2_1_390', 'f2_1_414', 'rgba(0, 188, 212, 0.15)'],  // Bottom Extension Zone: 1.39 to 1.41
+            // Upper Extension Reversal Zone
+            ['f1_1_390', 'f1_1_414', 'rgba(156, 39, 176, 0.25)'], 
+            // Lower Extension Reversal Zone
+            ['f2_1_390', 'f2_1_414', 'rgba(156, 39, 176, 0.25)'],
+            
+            // Upper Confluence Zone (f1 0.786 and f2 0.236 overlap)
+            ['f1_0_786', 'f2_0_236', 'rgba(100, 181, 246, 0.25)'], 
+            // Lower Confluence Zone (f1 0.236 and f2 0.786 overlap)
+            ['f1_0_236', 'f2_0_786', 'rgba(100, 181, 246, 0.25)'],
         ];
 
         REVERSAL_ZONES.forEach(([topKey, botKey, fillColor]) => {
@@ -838,12 +848,12 @@ function createChartWithZones(containerId, instrumentData, symbol, signal, globa
                 const price = lz.fibs[ld.key];
                 if (price == null) return;
                 const pl = plSeries.createPriceLine({
-                    price,
-                    color          : ld.color,
-                    lineWidth      : ld.style === LightweightCharts.LineStyle.Solid ? 2 : 1,
-                    lineStyle      : ld.style,
+                    price: price,
+                    color: ld.color || '#2a2e39',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
                     axisLabelVisible: true,
-                    title          : ld.title,
+                    title: ld.title || ld.label
                 });
                 activePriceLines.push(pl);
                 boundaryLevels.push({ price, label: ld.label, color: ld.color });

@@ -83,8 +83,15 @@ def group_into_weekly(daily_df):
             if current_candle:
                 weekly_data.append(current_candle)
             current_week = week_id
+            # Anchor the weekly candle's time to Monday 09:15 IST of this ISO week.
+            # Using the first trade timestamp is wrong for illiquid options — they can
+            # start trading Tuesday or later, which shifts the Fibonacci anchor window
+            # and causes add_true_anchors() to map pivots to the wrong week.
+            monday = dt.date() - timedelta(days=dt.weekday())
+            monday_open_ist = datetime(monday.year, monday.month, monday.day, 9, 15, 0, tzinfo=IST)
             current_candle = {
-                'time': d['time'], 'open': d['open'], 'high': d['high'],
+                'time': int(monday_open_ist.timestamp()),
+                'open': d['open'], 'high': d['high'],
                 'low': d['low'], 'close': d['close'], 'volume': d.get('volume', 0)
             }
         else:
@@ -99,6 +106,7 @@ def group_into_weekly(daily_df):
 def _calc_level(key, high, low):
     """Calculates price of a Fibonacci level based on high and low bounds."""
     direction, ratio, _, _ = FIB_RATIOS[key]
+        
     diff = high - low
     if direction == 'above':
         return low + diff * ratio
@@ -113,18 +121,6 @@ def _auto_weekly_high_low(weekly_df, symbol='SENSEX'):
 
     now = datetime.now(IST)
     current_iso_year, current_iso_week, _ = now.isocalendar()
-
-    # For options (CE/PE), they only live for one week.
-    # Use the ENTIRE LIFETIME raw high/low WITHOUT spike filtering.
-    # Options can legitimately move 200-500% in a week, so the spike filter
-    # would incorrectly truncate real highs and produce wrong Fib anchors.
-    if symbol != 'SENSEX':
-        max_high = max(w['high'] for w in weekly_df)  # Raw: no spike filter for options
-        min_low  = min(w['low']  for w in weekly_df)  # Raw: no spike filter for options
-        dt = datetime.fromtimestamp(weekly_df[-1]['time'], tz=IST).date()
-        start = dt - timedelta(days=dt.weekday())
-        end = start + timedelta(days=4)
-        return max_high, min_low, start, end
 
     completed_week = None
     for w in reversed(weekly_df):
@@ -146,22 +142,37 @@ def _auto_weekly_high_low(weekly_df, symbol='SENSEX'):
         # Approximate start as Monday and end as Friday of that week
         start = dt - timedelta(days=dt.weekday())
         end = start + timedelta(days=4)
-        filtered = _filter_spike(completed_week)
-        return filtered['high'], filtered['low'], start, end
+        
+        if symbol != 'SENSEX':
+            # Apply spike filtering for options too — consistent with get_fibonacci_danger_zone
+            # which calls _filter_spike() on every historical zone.
+            # The old logic skipped this "because options move 200-500%" but that's wrong:
+            # a single illiquid 9:15 AM trade can print a fake high (e.g. 1705 when the
+            # option genuinely traded at 1320 all week), corrupting the Fibonacci anchor.
+            filtered = _filter_spike(completed_week)
+            return filtered['high'], filtered['low'], start, end
+        else:
+            # Apply spike filtering to SENSEX to remove illiquid 9:15 AM prints
+            filtered = _filter_spike(completed_week)
+            return filtered['high'], filtered['low'], start, end
 
     return None, None, None, None
 
 def get_fibonacci_levels(weekly_df, symbol='SENSEX', manual_fibs=None):
     """Returns calculated levels dict, high boundary, and low boundary."""
+    abs_high, abs_low = None, None
     if manual_fibs and symbol in manual_fibs:
         high = manual_fibs[symbol]['high']
         low = manual_fibs[symbol]['low']
+        abs_high = manual_fibs[symbol].get('abs_high', high)
+        abs_low = manual_fibs[symbol].get('abs_low', low)
         # For manual, we approximate the week start/end to current week
         now = datetime.now(IST)
         start = now - timedelta(days=now.weekday())
         end = start + timedelta(days=4)
     else:
         high, low, start, end = _auto_weekly_high_low(weekly_df, symbol)
+        abs_high, abs_low = high, low
         if high is None:
             return None
 
