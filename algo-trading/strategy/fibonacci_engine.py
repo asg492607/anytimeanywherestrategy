@@ -114,10 +114,13 @@ def _auto_weekly_high_low(weekly_df, symbol='SENSEX'):
     now = datetime.now(IST)
     current_iso_year, current_iso_week, _ = now.isocalendar()
 
-    # For options, they only live for a week, so use the entire lifetime's high/low
+    # For options (CE/PE), they only live for one week.
+    # Use the ENTIRE LIFETIME raw high/low WITHOUT spike filtering.
+    # Options can legitimately move 200-500% in a week, so the spike filter
+    # would incorrectly truncate real highs and produce wrong Fib anchors.
     if symbol != 'SENSEX':
-        max_high = max([_filter_spike(w)['high'] for w in weekly_df])
-        min_low = min([_filter_spike(w)['low'] for w in weekly_df])
+        max_high = max(w['high'] for w in weekly_df)  # Raw: no spike filter for options
+        min_low  = min(w['low']  for w in weekly_df)  # Raw: no spike filter for options
         dt = datetime.fromtimestamp(weekly_df[-1]['time'], tz=IST).date()
         start = dt - timedelta(days=dt.weekday())
         end = start + timedelta(days=4)
